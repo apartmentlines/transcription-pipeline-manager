@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-A simple Flask server to receive and log POST requests for testing callbacks.
+A simple Flask server to receive and log POST requests for transcription pipeline runs.
 
 Listens on a specified port and prints the body of any incoming POST request.
-If the Content-Type is application/json, it pretty-prints the JSON payload.
+If the Content-Type is application/json, it prints the values for each key in the JSON payload.
 """
 
 import argparse
@@ -81,8 +81,9 @@ class CallbackServer:
             if content_type == "application/json":
                 try:
                     parsed_json: Any = json.loads(data)
-                    pretty_json: str = json.dumps(parsed_json, indent=2)
-                    self.log.info(f"Received JSON payload:\n{pretty_json}")
+                    self.log.debug("Received JSON payload")
+                    for key, value in parsed_json.items():
+                        print(f"\n{key}:\n{value}\n")
                 except json.JSONDecodeError:
                     self.log.warning(
                         "Content-Type is application/json but failed to parse body."
@@ -120,13 +121,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         type=str,
-        default=const.DEFAULT_TEST_CALLBACK_HOST,
+        default=const.DEFAULT_REST_HOST,
         help="Hostname to bind the server to (default: %(default)s).",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=const.DEFAULT_TEST_CALLBACK_PORT,
+        default=const.DEFAULT_REST_PORT,
         help="Port to bind the server to (default: %(default)s).",
     )
     parser.add_argument(

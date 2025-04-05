@@ -3,11 +3,11 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "transcription-pipeline"
+name = "transcription-pipeline-manager"
 version = "0.1.0"
-description = "A processing pipeline for transcribing audio files and storing the results in a database."
+description = "Manages periodically running the transcription pipeline."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name="Chad Phillips", email="chad@apartmentlines.com" },
@@ -17,21 +17,16 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "download-pipeline-processor @ git+https://github.com/apartmentlines/download-pipeline-processor.git@v0.1.1",
     "flask",
-    "numpy",
-    "requests",
-    "tenacity",
-    "torch",
-    "whisperx",
+    "pyyaml",
+    "pyaml-env",
+    # "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@v0.1.1",
+    "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@5b5e82fd16fb8eea33b1aa85583c6ef5363b5a2d",
 ]
 
 [project.scripts]
-audio-file-validator = "transcription_pipeline.audio_file_validator:main"
-transcription-processor = "transcription_pipeline.main:main"
-transcriber = "transcription_pipeline.transcriber:main"
-seed-models = "transcription_pipeline.seed_models:main"
-rest-interface = "transcription_pipeline.rest_interface:main"
+transcription-pipeline-manager = "transcription_pipeline_manager.manager:main"
+rest-interface = "transcription_pipeline_manager.rest_interface:main"
 
 [project.optional-dependencies]
 dev = [
