@@ -1,0 +1,3 @@
+# REST interface constants
+DEFAULT_REST_HOST = "127.0.0.1"
+DEFAULT_REST_PORT = 8080

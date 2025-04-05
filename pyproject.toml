@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcription-pipeline"
+version = "0.1.0"
+description = "A processing pipeline for transcribing audio files and storing the results in a database."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name="Chad Phillips", email="chad@apartmentlines.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "download-pipeline-processor @ git+https://github.com/apartmentlines/download-pipeline-processor.git@v0.1.1",
+    "flask",
+    "numpy",
+    "requests",
+    "tenacity",
+    "torch",
+    "whisperx",
+]
+
+[project.scripts]
+audio-file-validator = "transcription_pipeline.audio_file_validator:main"
+transcription-processor = "transcription_pipeline.main:main"
+transcriber = "transcription_pipeline.transcriber:main"
+seed-models = "transcription_pipeline.seed_models:main"
+rest-interface = "transcription_pipeline.rest_interface:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+    "pyright",
+]
