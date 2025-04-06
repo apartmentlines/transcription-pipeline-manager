@@ -31,6 +31,7 @@ rest-interface = "transcription_pipeline_manager.rest_interface:main"
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-mock",
     "black",
     "flake8",
     "pyright",
