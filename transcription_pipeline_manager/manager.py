@@ -25,12 +25,12 @@ class TranscriptionPipelineManager:
         debug: bool = False,
     ) -> None:
         self.log: logging.Logger = Logger(self.__class__.__name__, debug=debug)
-        self.api_key: str = api_key
-        self.domain: str = domain
+        self.api_key: str | None = api_key
+        self.domain: str | None = domain
         self.debug: bool = debug
 
     def build_retrieve_callback_url(self) -> str:
-        return f"https://www.{self.domain}/api/transcription/batch-complete"
+        return f"https://www.{self.domain}/api/transcription/logs?api_key={self.api_key}"
 
     def setup_configuration(self) -> None:
         self.log.debug("Setting up configuration")
