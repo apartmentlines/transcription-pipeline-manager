@@ -1,0 +1,20 @@
+# Pod.
+pod_name: transcription-pipeline
+image_name: apartmentlinesproduction/transcription-pipeline:v0.1.0
+gpu_types:
+  - NVIDIA GeForce RTX 3090
+  - NVIDIA A40
+  # - NVIDIA RTX A5000
+cloud_type: SECURE
+start_ssh: false
+gpu_count: 1
+container_disk_in_gb: 20
+docker_args: "/usr/src/transcription-pipeline/run-pod.sh --debug"
+ports: "22/tcp,8080/http"
+env:
+  TRANSCRIPTION_API_KEY: !ENV ${TRANSCRIPTION_API_KEY}
+  TRANSCRIPTION_DOMAIN: !ENV ${TRANSCRIPTION_DOMAIN}
+
+# Retry.
+create_gpu_retries: 30
+create_retry_wait_seconds: 5
