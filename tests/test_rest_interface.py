@@ -15,7 +15,7 @@ from flask.testing import FlaskClient
 
 from transcription_pipeline_manager import constants as const
 from transcription_pipeline_manager.rest_interface import (
-    CallbackServer,
+    RestInterface,
     Stats,
     main,
     parse_args,
@@ -41,10 +41,10 @@ def debug_mode(request) -> bool:
 
 
 @pytest.fixture
-def server_no_api_key(debug_mode) -> CallbackServer:
-    """Fixture for a CallbackServer instance without an API key."""
+def server_no_api_key(debug_mode) -> RestInterface:
+    """Fixture for a RestInterface instance without an API key."""
     original_env_key = os.environ.pop("TRANSCRIPTION_API_KEY", None)
-    server = CallbackServer(host=TEST_HOST, port=TEST_PORT, api_key=None, debug=debug_mode)
+    server = RestInterface(host=TEST_HOST, port=TEST_PORT, api_key=None, debug=debug_mode)
     server._register_routes()
     yield server
     if original_env_key is not None:
@@ -54,15 +54,15 @@ def server_no_api_key(debug_mode) -> CallbackServer:
 
 
 @pytest.fixture
-def client_no_api_key(server_no_api_key: CallbackServer) -> FlaskClient:
+def client_no_api_key(server_no_api_key: RestInterface) -> FlaskClient:
     """Fixture for a test client for a server without an API key."""
     return server_no_api_key.app.test_client()
 
 
 @pytest.fixture
-def server_with_api_key(debug_mode) -> CallbackServer:
-    """Fixture for a CallbackServer instance with an API key."""
-    server = CallbackServer(host=TEST_HOST, port=TEST_PORT, api_key=TEST_API_KEY, debug=debug_mode)
+def server_with_api_key(debug_mode) -> RestInterface:
+    """Fixture for a RestInterface instance with an API key."""
+    server = RestInterface(host=TEST_HOST, port=TEST_PORT, api_key=TEST_API_KEY, debug=debug_mode)
     server._register_routes()
     yield server
     if server.thread and server.thread.is_alive():
@@ -70,7 +70,7 @@ def server_with_api_key(debug_mode) -> CallbackServer:
 
 
 @pytest.fixture
-def client_with_api_key(server_with_api_key: CallbackServer) -> FlaskClient:
+def client_with_api_key(server_with_api_key: RestInterface) -> FlaskClient:
     """Fixture for a test client for a server with an API key."""
     return server_with_api_key.app.test_client()
 
@@ -130,9 +130,9 @@ def test_stats_get_all_stats(stats: Stats) -> None:
 
 
 def test_server_init_defaults(debug_mode: bool) -> None:
-    """Test CallbackServer initialization with default arguments."""
+    """Test RestInterface initialization with default arguments."""
     original_env_key = os.environ.pop("TRANSCRIPTION_API_KEY", None)
-    server = CallbackServer(host=TEST_HOST, port=TEST_PORT, debug=debug_mode)
+    server = RestInterface(host=TEST_HOST, port=TEST_PORT, debug=debug_mode)
     assert server.host == TEST_HOST
     assert server.port == TEST_PORT
     assert server.api_key is None
@@ -147,11 +147,11 @@ def test_server_init_defaults(debug_mode: bool) -> None:
 
 
 def test_server_init_custom(debug_mode: bool) -> None:
-    """Test CallbackServer initialization with custom arguments."""
+    """Test RestInterface initialization with custom arguments."""
     custom_host = "0.0.0.0"
     custom_port = 9999
     custom_key = "custom-key"
-    server = CallbackServer(host=custom_host, port=custom_port, api_key=custom_key, debug=debug_mode)
+    server = RestInterface(host=custom_host, port=custom_port, api_key=custom_key, debug=debug_mode)
     assert server.host == custom_host
     assert server.port == custom_port
     assert server.api_key == custom_key
@@ -159,11 +159,11 @@ def test_server_init_custom(debug_mode: bool) -> None:
 
 
 def test_server_init_api_key_env_var(monkeypatch, debug_mode: bool) -> None:
-    """Test CallbackServer initialization picks up API key from environment variable."""
+    """Test RestInterface initialization picks up API key from environment variable."""
     monkeypatch.setenv("TRANSCRIPTION_API_KEY", "env-key")
-    server = CallbackServer(host=TEST_HOST, port=TEST_PORT, api_key=None, debug=debug_mode)
+    server = RestInterface(host=TEST_HOST, port=TEST_PORT, api_key=None, debug=debug_mode)
     assert server.api_key == "env-key"
-    server_override = CallbackServer(host=TEST_HOST, port=TEST_PORT, api_key="override-key", debug=debug_mode)
+    server_override = RestInterface(host=TEST_HOST, port=TEST_PORT, api_key="override-key", debug=debug_mode)
     assert server_override.api_key == "override-key"
 
 
@@ -214,7 +214,7 @@ def test_get_stats_initial(client_no_api_key: FlaskClient) -> None:
     }
 
 
-def test_get_stats_updated(server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_get_stats_updated(server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test GET /stats after updating values."""
     server_no_api_key.update_pods_total(10)
     server_no_api_key.update_pods_running(5)
@@ -226,7 +226,7 @@ def test_get_stats_updated(server_no_api_key: CallbackServer, client_no_api_key:
     }
 
 
-def test_get_stats_error(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_get_stats_error(mocker, server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test GET /stats when an internal error occurs."""
     mocker.patch.object(server_no_api_key.stats, "get_all_stats", side_effect=Exception("Test error"))
     response = client_no_api_key.get("/stats")
@@ -234,7 +234,7 @@ def test_get_stats_error(mocker, server_no_api_key: CallbackServer, client_no_ap
     assert response.json == {"error": "Internal Server Error"}
 
 
-def test_post_logs_json(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_post_logs_json(mocker, server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test POST /logs with valid JSON data."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     json_data = {"key1": "value1", "status": "completed"}
@@ -246,7 +246,7 @@ def test_post_logs_json(mocker, server_no_api_key: CallbackServer, client_no_api
     mock_log.debug.assert_any_call("Received JSON payload")
 
 
-def test_post_logs_invalid_json(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_post_logs_invalid_json(mocker, server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test POST /logs with invalid JSON data but correct Content-Type."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     invalid_json_string = '{"key": "value", "malformed": }'
@@ -261,7 +261,7 @@ def test_post_logs_invalid_json(mocker, server_no_api_key: CallbackServer, clien
     mock_log.info.assert_any_call(f"Raw body:\n{invalid_json_string}")
 
 
-def test_post_logs_non_json(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_post_logs_non_json(mocker, server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test POST /logs with non-JSON data."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     text_data = "This is plain text data."
@@ -276,7 +276,7 @@ def test_post_logs_non_json(mocker, server_no_api_key: CallbackServer, client_no
     mock_log.info.assert_any_call(f"Received non-JSON body:\n{text_data}")
 
 
-def test_post_logs_error(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+def test_post_logs_error(mocker, server_no_api_key: RestInterface, client_no_api_key: FlaskClient) -> None:
     """Test POST /logs when an internal error occurs during processing."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     test_exception = Exception("Test data read error")
@@ -290,7 +290,7 @@ def test_post_logs_error(mocker, server_no_api_key: CallbackServer, client_no_ap
         exc_info=server_no_api_key.debug
     )
 
-def test_update_pods_total(mocker, server_no_api_key: CallbackServer) -> None:
+def test_update_pods_total(mocker, server_no_api_key: RestInterface) -> None:
     """Test the update_pods_total method."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     server_no_api_key.update_pods_total(10)
@@ -298,7 +298,7 @@ def test_update_pods_total(mocker, server_no_api_key: CallbackServer) -> None:
     mock_log.debug.assert_called_once_with("Updating pods_total to 10")
 
 
-def test_update_pods_running(mocker, server_no_api_key: CallbackServer) -> None:
+def test_update_pods_running(mocker, server_no_api_key: RestInterface) -> None:
     """Test the update_pods_running method."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     server_no_api_key.update_pods_running(7)
@@ -306,7 +306,7 @@ def test_update_pods_running(mocker, server_no_api_key: CallbackServer) -> None:
     mock_log.debug.assert_called_once_with("Updating pods_running to 7")
 
 
-def test_update_pipeline_last_run_time(mocker, server_no_api_key: CallbackServer) -> None:
+def test_update_pipeline_last_run_time(mocker, server_no_api_key: RestInterface) -> None:
     """Test the update_pipeline_last_run_time method."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
     server_no_api_key.update_pipeline_last_run_time(TEST_TIMESTAMP + 1)
@@ -316,10 +316,10 @@ def test_update_pipeline_last_run_time(mocker, server_no_api_key: CallbackServer
 
 
 @patch("threading.Thread")
-@patch("transcription_pipeline_manager.rest_interface.CallbackServer._register_routes")
+@patch("transcription_pipeline_manager.rest_interface.RestInterface._register_routes")
 @patch("flask.Flask.run")
-def test_server_start(mock_flask_run, mock_register_routes, mock_thread_class, server_no_api_key: CallbackServer, mocker) -> None:
-    """Test the start method of CallbackServer."""
+def test_server_start(mock_flask_run, mock_register_routes, mock_thread_class, server_no_api_key: RestInterface, mocker) -> None:
+    """Test the start method of RestInterface."""
     mock_thread_instance = MagicMock()
     mock_thread_class.return_value = mock_thread_instance
 
@@ -338,7 +338,7 @@ def test_server_start(mock_flask_run, mock_register_routes, mock_thread_class, s
     assert server_no_api_key.thread == mock_thread_instance
 
 
-def test_server_shutdown_running(server_no_api_key: CallbackServer) -> None:
+def test_server_shutdown_running(server_no_api_key: RestInterface) -> None:
     """Test shutdown when the server thread is running."""
     mock_thread_instance = MagicMock()
     mock_thread_instance.is_alive.return_value = True
@@ -351,7 +351,7 @@ def test_server_shutdown_running(server_no_api_key: CallbackServer) -> None:
     assert server_no_api_key.thread is None
 
 
-def test_server_shutdown_not_running(server_no_api_key: CallbackServer) -> None:
+def test_server_shutdown_not_running(server_no_api_key: RestInterface) -> None:
     """Test shutdown when the server thread is not running or already finished."""
     mock_thread_instance = MagicMock()
     mock_thread_instance.is_alive.return_value = False
@@ -364,7 +364,7 @@ def test_server_shutdown_not_running(server_no_api_key: CallbackServer) -> None:
     assert server_no_api_key.thread is None
 
 
-def test_server_shutdown_no_thread(server_no_api_key: CallbackServer) -> None:
+def test_server_shutdown_no_thread(server_no_api_key: RestInterface) -> None:
     """Test shutdown when the server thread was never started."""
     assert server_no_api_key.thread is None
     server_no_api_key.shutdown()
@@ -407,7 +407,7 @@ def test_parse_args_custom(mocker) -> None:
 
 
 @patch("transcription_pipeline_manager.rest_interface.parse_args")
-@patch("transcription_pipeline_manager.rest_interface.CallbackServer")
+@patch("transcription_pipeline_manager.rest_interface.RestInterface")
 @patch("transcription_pipeline_manager.rest_interface.Logger")
 @patch("time.sleep", side_effect=KeyboardInterrupt)
 @patch("sys.exit")
@@ -417,7 +417,7 @@ def test_main_success_flow(mock_exit, mock_sleep, mock_logger_class, mock_server
         host="main_host", port=1234, api_key="main_key", debug=True
     )
     mock_parse_args.return_value = mock_args
-    mock_server_instance = MagicMock(spec=CallbackServer)
+    mock_server_instance = MagicMock(spec=RestInterface)
     mock_server_instance.stop_event = threading.Event()
     mock_server_class.return_value = mock_server_instance
     mock_log_instance = MagicMock()
@@ -438,7 +438,7 @@ def test_main_success_flow(mock_exit, mock_sleep, mock_logger_class, mock_server
 
 
 @patch("transcription_pipeline_manager.rest_interface.parse_args")
-@patch("transcription_pipeline_manager.rest_interface.CallbackServer")
+@patch("transcription_pipeline_manager.rest_interface.RestInterface")
 @patch("transcription_pipeline_manager.rest_interface.Logger")
 @patch("traceback.print_exc")
 @patch("sys.exit")

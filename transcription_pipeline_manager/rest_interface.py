@@ -24,7 +24,7 @@ from .logger import Logger
 
 class Stats:
     """
-    Thread-safe storage for application statistics. Internal to CallbackServer.
+    Thread-safe storage for application statistics. Internal to RestInterface.
     """
 
     def __init__(self) -> None:
@@ -114,14 +114,14 @@ class Stats:
             }
 
 
-class CallbackServer:
+class RestInterface:
     """
     Encapsulates the Flask application for handling callback requests.
     """
 
     def __init__(self, host: str, port: int, api_key: str | None = None, debug: bool = False) -> None:
         """
-        Initializes the CallbackServer.
+        Initializes the RestInterface.
 
         :param host: The hostname to listen on.
         :type host: str
@@ -142,7 +142,7 @@ class CallbackServer:
         self.thread: threading.Thread | None = None
         self.stop_event: threading.Event = threading.Event()
         self._register_request_hooks()
-        self.log.debug("CallbackServer initialized.")
+        self.log.debug("RestInterface initialized.")
 
     def _register_request_hooks(self) -> None:
         """Registers Flask request hooks."""
@@ -349,7 +349,7 @@ def main() -> None:
     exit_code = const.EXIT_SUCCESS
 
     try:
-        server = CallbackServer(host=args.host, port=args.port, api_key=args.api_key, debug=args.debug)
+        server = RestInterface(host=args.host, port=args.port, api_key=args.api_key, debug=args.debug)
         server.start()
         main_log.info("Callback server running in background thread. Press Ctrl+C to stop.")
         # Keep the main thread alive while the daemon server thread runs
