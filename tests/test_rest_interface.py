@@ -78,16 +78,17 @@ def client_with_api_key(server_with_api_key: CallbackServer) -> FlaskClient:
 
 def test_stats_initialization(stats: Stats) -> None:
     """Test Stats default initialization."""
-    assert stats.get_pods_count() == 0
+    assert stats.get_pods_total() == 0
+    assert stats.get_pods_running() == 0
     assert stats.get_pipeline_last_run_time() == 0
 
 
-def test_stats_set_get_pods_count(stats: Stats) -> None:
-    """Test setting and getting pods_count."""
-    stats.set_pods_count(5)
-    assert stats.get_pods_count() == 5
-    stats.set_pods_count(0)
-    assert stats.get_pods_count() == 0
+def test_stats_set_get_pods_total(stats: Stats) -> None:
+    """Test setting and getting pods_total."""
+    stats.set_pods_total(5)
+    assert stats.get_pods_total() == 5
+    stats.set_pods_total(0)
+    assert stats.get_pods_total() == 0
 
 
 def test_stats_set_get_pipeline_last_run_time(stats: Stats) -> None:
@@ -96,6 +97,35 @@ def test_stats_set_get_pipeline_last_run_time(stats: Stats) -> None:
     assert stats.get_pipeline_last_run_time() == TEST_TIMESTAMP
     stats.set_pipeline_last_run_time(0)
     assert stats.get_pipeline_last_run_time() == 0
+
+
+def test_stats_set_get_pods_running(stats: Stats) -> None:
+    """Test setting and getting pods_running."""
+    stats.set_pods_running(3)
+    assert stats.get_pods_running() == 3
+    stats.set_pods_running(0)
+    assert stats.get_pods_running() == 0
+
+
+def test_stats_get_all_stats(stats: Stats) -> None:
+    """Test the get_all_stats method."""
+    initial_stats = stats.get_all_stats()
+    assert initial_stats == {
+        "pods_total": 0,
+        "pods_running": 0,
+        "pipeline_last_run_time": 0,
+    }
+
+    stats.set_pods_total(5)
+    stats.set_pods_running(3)
+    stats.set_pipeline_last_run_time(TEST_TIMESTAMP)
+
+    updated_stats = stats.get_all_stats()
+    assert updated_stats == {
+        "pods_total": 5,
+        "pods_running": 3,
+        "pipeline_last_run_time": TEST_TIMESTAMP,
+    }
 
 
 
@@ -137,10 +167,9 @@ def test_server_init_api_key_env_var(monkeypatch, debug_mode: bool) -> None:
     assert server_override.api_key == "override-key"
 
 
-
 def test_api_key_required_endpoints(client_with_api_key: FlaskClient) -> None:
     """Test that endpoints require API key when server is configured with one."""
-    endpoints = ["/stats/pods-count", "/stats/pipeline-last-run-time", "/logs"]
+    endpoints = ["/stats", "/logs"]
     for endpoint in endpoints:
         method = "POST" if endpoint == "/logs" else "GET"
         response = client_with_api_key.open(endpoint, method=method)
@@ -150,7 +179,7 @@ def test_api_key_required_endpoints(client_with_api_key: FlaskClient) -> None:
 
 def test_api_key_invalid(client_with_api_key: FlaskClient) -> None:
     """Test that endpoints reject invalid API keys."""
-    endpoints = ["/stats/pods-count", "/stats/pipeline-last-run-time", "/logs"]
+    endpoints = ["/stats", "/logs"]
     for endpoint in endpoints:
         method = "POST" if endpoint == "/logs" else "GET"
         response = client_with_api_key.open(f"{endpoint}?api_key=wrongkey", method=method)
@@ -160,10 +189,8 @@ def test_api_key_invalid(client_with_api_key: FlaskClient) -> None:
 
 def test_api_key_correct(client_with_api_key: FlaskClient) -> None:
     """Test that endpoints accept the correct API key."""
-    get_endpoints = ["/stats/pods-count", "/stats/pipeline-last-run-time"]
-    for endpoint in get_endpoints:
-        response = client_with_api_key.get(f"{endpoint}?api_key={TEST_API_KEY}")
-        assert response.status_code == 200
+    response = client_with_api_key.get(f"/stats?api_key={TEST_API_KEY}")
+    assert response.status_code == 200
 
     response = client_with_api_key.post(f"/logs?api_key={TEST_API_KEY}", data="test data")
     assert response.status_code == 200
@@ -171,63 +198,40 @@ def test_api_key_correct(client_with_api_key: FlaskClient) -> None:
 
 def test_api_key_not_required(client_no_api_key: FlaskClient) -> None:
     """Test that endpoints are accessible without API key if server is not configured."""
-    get_endpoints = ["/stats/pods-count", "/stats/pipeline-last-run-time"]
-    for endpoint in get_endpoints:
-        response = client_no_api_key.get(endpoint)
-        assert response.status_code == 200
+    response = client_no_api_key.get("/stats")
+    assert response.status_code == 200
 
     response = client_no_api_key.post("/logs", data="test data")
     assert response.status_code == 200
 
 
-
-
-def test_get_pods_count_initial(client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pods-count initial value."""
-    response = client_no_api_key.get("/stats/pods-count")
+def test_get_stats_initial(client_no_api_key: FlaskClient) -> None:
+    """Test GET /stats initial value."""
+    response = client_no_api_key.get("/stats")
     assert response.status_code == 200
-    assert response.json == {"pods_count": 0}
+    assert response.json == {
+        "stats": {"pods_total": 0, "pods_running": 0, "pipeline_last_run_time": 0}
+    }
 
 
-def test_get_pods_count_updated(server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pods-count after updating the value."""
-    server_no_api_key.update_pods_count(5)
-    response = client_no_api_key.get("/stats/pods-count")
-    assert response.status_code == 200
-    assert response.json == {"pods_count": 5}
-
-
-def test_get_pods_count_error(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pods-count when an internal error occurs."""
-    mocker.patch.object(server_no_api_key.stats, "get_pods_count", side_effect=Exception("Test error"))
-    response = client_no_api_key.get("/stats/pods-count")
-    assert response.status_code == 500
-    assert response.json == {"error": "Internal Server Error"}
-
-
-
-def test_get_last_run_time_initial(client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pipeline-last-run-time initial value."""
-    response = client_no_api_key.get("/stats/pipeline-last-run-time")
-    assert response.status_code == 200
-    assert response.json == {"pipeline_last_run_time": 0}
-
-
-def test_get_last_run_time_updated(server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pipeline-last-run-time after updating the value."""
+def test_get_stats_updated(server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+    """Test GET /stats after updating values."""
+    server_no_api_key.update_pods_total(10)
+    server_no_api_key.update_pods_running(5)
     server_no_api_key.update_pipeline_last_run_time(TEST_TIMESTAMP)
-    response = client_no_api_key.get("/stats/pipeline-last-run-time")
+    response = client_no_api_key.get("/stats")
     assert response.status_code == 200
-    assert response.json == {"pipeline_last_run_time": TEST_TIMESTAMP}
+    assert response.json == {
+        "stats": {"pods_total": 10, "pods_running": 5, "pipeline_last_run_time": TEST_TIMESTAMP}
+    }
 
 
-def test_get_last_run_time_error(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
-    """Test GET /stats/pipeline-last-run-time when an internal error occurs."""
-    mocker.patch.object(server_no_api_key.stats, "get_pipeline_last_run_time", side_effect=Exception("Test error"))
-    response = client_no_api_key.get("/stats/pipeline-last-run-time")
+def test_get_stats_error(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
+    """Test GET /stats when an internal error occurs."""
+    mocker.patch.object(server_no_api_key.stats, "get_all_stats", side_effect=Exception("Test error"))
+    response = client_no_api_key.get("/stats")
     assert response.status_code == 500
     assert response.json == {"error": "Internal Server Error"}
-
 
 
 def test_post_logs_json(mocker, server_no_api_key: CallbackServer, client_no_api_key: FlaskClient) -> None:
@@ -286,14 +290,20 @@ def test_post_logs_error(mocker, server_no_api_key: CallbackServer, client_no_ap
         exc_info=server_no_api_key.debug
     )
 
-
-
-def test_update_pods_count(mocker, server_no_api_key: CallbackServer) -> None:
-    """Test the update_pods_count method."""
+def test_update_pods_total(mocker, server_no_api_key: CallbackServer) -> None:
+    """Test the update_pods_total method."""
     mock_log = mocker.patch.object(server_no_api_key, "log")
-    server_no_api_key.update_pods_count(10)
-    assert server_no_api_key.stats.get_pods_count() == 10
-    mock_log.debug.assert_called_once_with("Updating pods_count to 10")
+    server_no_api_key.update_pods_total(10)
+    assert server_no_api_key.stats.get_pods_total() == 10
+    mock_log.debug.assert_called_once_with("Updating pods_total to 10")
+
+
+def test_update_pods_running(mocker, server_no_api_key: CallbackServer) -> None:
+    """Test the update_pods_running method."""
+    mock_log = mocker.patch.object(server_no_api_key, "log")
+    server_no_api_key.update_pods_running(7)
+    assert server_no_api_key.stats.get_pods_running() == 7
+    mock_log.debug.assert_called_once_with("Updating pods_running to 7")
 
 
 def test_update_pipeline_last_run_time(mocker, server_no_api_key: CallbackServer) -> None:

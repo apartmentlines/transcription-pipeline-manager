@@ -31,29 +31,50 @@ class Stats:
         """
         Initializes statistics and the lock.
         """
-        self.pods_count: int = 0
+        self.pods_total: int = 0
+        self.pods_running: int = 0
         self.pipeline_last_run_time: int = 0
         self._lock: threading.Lock = threading.Lock()
 
-    def get_pods_count(self) -> int:
+    def get_pods_total(self) -> int:
         """
-        Returns the current pods_count.
+        Returns the current total pod count.
 
-        :return: The current count of pods.
+        :return: The current total count of pods.
         :rtype: int
         """
         with self._lock:
-            return self.pods_count
+            return self.pods_total
 
-    def set_pods_count(self, count: int) -> None:
+    def set_pods_total(self, count: int) -> None:
         """
-        Sets the pods_count.
+        Sets the total pod count.
 
-        :param count: The new count of pods.
+        :param count: The new total count of pods.
         :type count: int
         """
         with self._lock:
-            self.pods_count = count
+            self.pods_total = count
+
+    def get_pods_running(self) -> int:
+        """
+        Returns the current running pod count.
+
+        :return: The current count of running pods.
+        :rtype: int
+        """
+        with self._lock:
+            return self.pods_running
+
+    def set_pods_running(self, count: int) -> None:
+        """
+        Sets the running pod count.
+
+        :param count: The new count of running pods.
+        :type count: int
+        """
+        with self._lock:
+            self.pods_running = count
 
     def get_pipeline_last_run_time(self) -> int:
         """
@@ -74,6 +95,23 @@ class Stats:
         """
         with self._lock:
             self.pipeline_last_run_time = timestamp
+
+    def get_all_stats(self) -> dict[str, int]:
+        """
+        Returns a dictionary containing all current statistics.
+
+        Acquires the lock once to ensure a consistent snapshot of stats.
+
+        :return: A dictionary with keys 'pods_total', 'pods_running',
+                 and 'pipeline_last_run_time'.
+        :rtype: dict[str, int]
+        """
+        with self._lock:
+            return {
+                "pods_total": self.pods_total,
+                "pods_running": self.pods_running,
+                "pipeline_last_run_time": self.pipeline_last_run_time,
+            }
 
 
 class CallbackServer:
@@ -137,15 +175,9 @@ class CallbackServer:
         Registers the Flask routes for the server.
         """
         self.app.add_url_rule(
-            "/stats/pods-count",
-            endpoint="get_pods_count",
-            view_func=self.get_pods_count_handler,
-            methods=["GET"],
-        )
-        self.app.add_url_rule(
-            "/stats/pipeline-last-run-time",
-            endpoint="get_pipeline_last_run_time",
-            view_func=self.get_last_run_time_handler,
+            "/stats",
+            endpoint="get_stats",
+            view_func=self.get_stats_handler,
             methods=["GET"],
         )
         self.app.add_url_rule(
@@ -156,32 +188,17 @@ class CallbackServer:
         )
         self.log.debug("Registered routes.")
 
-    def get_pods_count_handler(self) -> tuple[Any, int]:
+    def get_stats_handler(self) -> tuple[Any, int]:
         """
-        Handles GET requests for the current pod count.
+        Handles GET requests for all statistics.
 
         :return: A tuple containing the JSON response and status code.
         :rtype: tuple[Any, int]
         """
         self.log.debug(f"Received GET request to: {request.path}")
         try:
-            count = self.stats.get_pods_count()
-            return jsonify({"pods_count": count}), 200
-        except Exception as e:
-            self.log.error(f"Error processing request to {request.path}: {e}", exc_info=self.debug)
-            return jsonify({"error": "Internal Server Error"}), 500
-
-    def get_last_run_time_handler(self) -> tuple[Any, int]:
-        """
-        Handles GET requests for the last pipeline run time.
-
-        :return: A tuple containing the JSON response and status code.
-        :rtype: tuple[Any, int]
-        """
-        self.log.debug(f"Received GET request to: {request.path}")
-        try:
-            timestamp = self.stats.get_pipeline_last_run_time()
-            return jsonify({"pipeline_last_run_time": timestamp}), 200
+            all_stats = self.stats.get_all_stats()
+            return jsonify({"stats": all_stats}), 200
         except Exception as e:
             self.log.error(f"Error processing request to {request.path}: {e}", exc_info=self.debug)
             return jsonify({"error": "Internal Server Error"}), 500
@@ -258,15 +275,25 @@ class CallbackServer:
             self.log.info("Callback server thread was not running or already finished.")
         self.thread = None
 
-    def update_pods_count(self, count: int) -> None:
+    def update_pods_total(self, count: int) -> None:
         """
-        Updates the pod count statistic.
+        Updates the total pod count statistic.
 
-        :param count: The new pod count.
+        :param count: The new total pod count.
         :type count: int
         """
-        self.log.debug(f"Updating pods_count to {count}")
-        self.stats.set_pods_count(count)
+        self.log.debug(f"Updating pods_total to {count}")
+        self.stats.set_pods_total(count)
+
+    def update_pods_running(self, count: int) -> None:
+        """
+        Updates the running pod count statistic.
+
+        :param count: The new running pod count.
+        :type count: int
+        """
+        self.log.debug(f"Updating pods_running to {count}")
+        self.stats.set_pods_running(count)
 
     def update_pipeline_last_run_time(self, timestamp: int) -> None:
         """
