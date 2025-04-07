@@ -20,6 +20,7 @@ dependencies = [
     "flask",
     "pyyaml",
     "pyaml-env",
+    "requests",
     # "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@v0.1.1",
     "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@41338929b00110e038955c628a5db8421fdca281",
 ]
