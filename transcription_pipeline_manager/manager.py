@@ -120,7 +120,6 @@ class TranscriptionPipelineManager:
         self.log.debug("RunPod Start Manager initialized.")
         self.runpod_terminate_manager: RunpodSingletonManager = RunpodSingletonManager(
             config_path=self.runpod_config_path,
-            api_key=self.api_key,
             debug=self.debug,
             terminate=True
         )

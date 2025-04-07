@@ -197,12 +197,10 @@ def test_manager_init_defaults(
     expected_runpod_calls = [
         call(
             config_path=expected_config_path,
-            api_key=TEST_API_KEY,
             debug=False,
         ),
         call(
             config_path=expected_config_path,
-            api_key=TEST_API_KEY,
             debug=False,
             terminate=True
         ),
@@ -274,12 +272,10 @@ def test_manager_init_custom_values(
     expected_runpod_calls = [
         call(
             config_path=expected_config_path,
-            api_key=TEST_API_KEY,
             debug=custom_debug,
         ),
         call(
             config_path=expected_config_path,
-            api_key=TEST_API_KEY,
             debug=custom_debug,
             terminate=True
         ),
