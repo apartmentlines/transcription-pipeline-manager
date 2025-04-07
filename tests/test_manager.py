@@ -632,6 +632,585 @@ def test_handle_waiting_after_failure(manager_instance: TranscriptionPipelineMan
 
 # Phase 3: run() Method Integration Tests
 
+# NOTE: These tests now call run() directly, mocking instance methods
+# 'get_current_time' and 'sleep' to control the loop execution.
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+def test_run_initialization_and_immediate_shutdown(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mock_rest_interface: MagicMock, # Fixture provides the mock instance
+    mocker: MockerFixture,
+) -> None:
+    """Test run() calls setup methods and REST start, then shuts down."""
+    # Stop the loop immediately
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', return_value=True)
+    # Provide a time value for the single loop check
+    mock_get_current_time.return_value = 1000.0
+
+    manager_instance.run() # Call directly
+
+    mock_setup_signals.assert_called_once()
+    mock_rest_interface.start.assert_called_once()
+    # _shutdown is called in finally block
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pipeline_run")
+@patch.object(TranscriptionPipelineManager, "_handle_updating_counts")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_navigates_full_success_cycle(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_handle_updating: MagicMock,
+    mock_handle_attempt_run: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test run() successfully navigates the main state sequence directly."""
+    # Let the loop run enough times for all states, then stop
+    num_loops = 7 # Start -> Attempt -> Wait(x2) -> Run -> Update -> Update(stay)
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+
+    # Simulate time advancing slightly each loop
+    mock_get_current_time.side_effect = [1000.0 + i for i in range(num_loops + 1)]
+    start_time = 1000.0
+
+    # --- Mock State Transitions ---
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+    # Simulate one check returning not idle, then idle
+    mock_handle_wait_idle.side_effect = [
+        (const.STATE_WAITING_FOR_IDLE, start_time + 1), # Loop 3: returns wait
+        (const.STATE_ATTEMPTING_PIPELINE_RUN, start_time + 2), # Loop 4: returns run
+    ]
+    mock_handle_attempt_run.return_value = const.STATE_UPDATING_COUNTS # Loop 5
+    # Stay in updating counts
+    mock_handle_updating.return_value = (const.STATE_UPDATING_COUNTS, start_time + 3) # Loop 6, 7
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assert handlers were called
+    mock_handle_start_cycle.assert_called_once()
+    mock_handle_attempt_start.assert_called_once()
+    assert mock_handle_wait_idle.call_count == 2
+    mock_handle_attempt_run.assert_called_once()
+    assert mock_handle_updating.call_count >= 1 # Called in loops 6 and 7
+
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_triggers_hourly_reset(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test run() resets to STARTING_CYCLE after CYCLE_DURATION."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait -> Wait (Time < CYCLE_DURATION)
+    # 4: Wait -> Wait (Time >= CYCLE_DURATION -> Reset happens BEFORE handler)
+    # 5: Start -> Attempt (Loop stops)
+    num_loops = 5
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+
+    # Simulate time: Start, small increments, then jump past CYCLE_DURATION
+    start_time = 1000.0
+    time_before_reset = start_time + const.CYCLE_DURATION - 10
+    time_after_reset = start_time + const.CYCLE_DURATION + 10
+    mock_get_current_time.side_effect = [
+        start_time,     # Loop 1 'now'
+        start_time + 1, # Loop 2 'now'
+        time_before_reset, # Loop 3 'now' (before timeout)
+        time_after_reset,  # Loop 4 'now' (after timeout, triggers reset check)
+        time_after_reset + 1, # Loop 5 'now'
+        time_after_reset + 2, # Extra time for shutdown check
+    ]
+
+    # --- Mock State Transitions ---
+    # Configure start cycle to be callable multiple times
+    def start_cycle_side_effect(now):
+        # The 'now' passed here is the mocked time for the current loop iteration
+        return (const.STATE_ATTEMPTING_POD_START, now, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.side_effect = start_cycle_side_effect
+
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+
+    # Stay in WAITING_FOR_IDLE - use side_effect to get current time
+    def wait_idle_side_effect(now, elapsed, last_idle, *args):
+        # This will be called in loop 3 (time < reset) and loop 4 (time >= reset)
+        # The reset check in run() happens *before* this handler in loop 4
+        return (const.STATE_WAITING_FOR_IDLE, now) # Return current time as last_check_time
+    mock_handle_wait_idle.side_effect = wait_idle_side_effect
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assertions
+    assert mock_handle_start_cycle.call_count == 2 # Called in loop 1 and loop 5 (after reset)
+    mock_handle_attempt_start.assert_called() # Called in loop 1 and 5
+    assert mock_handle_wait_idle.call_count >= 1 # Called in loop 3
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_shuts_down_cleanly_on_event(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test run() shuts down cleanly when the event is set."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait -> Wait (Event is set after this loop)
+    # 4: Loop terminates on event check
+    num_loops = 3
+    # Set the event after num_loops iterations
+    shutdown_side_effect = [False] * num_loops
+    def set_event_then_check(*args):
+        if not shutdown_side_effect: # If list is empty, event should be set
+            return True
+        result = shutdown_side_effect.pop(0)
+        if not shutdown_side_effect: # If that was the last False, set the real event
+             manager_instance.shutdown_event.set()
+        return result
+    mock_event_is_set = mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=set_event_then_check)
+
+    mock_get_current_time.side_effect = [1000.0 + i for i in range(num_loops + 1)]
+
+    # --- Mock State Transitions ---
+    start_time = 1000.0
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+    mock_handle_wait_idle.return_value = (const.STATE_WAITING_FOR_IDLE, start_time + 1.0)
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assertions
+    assert mock_handle_wait_idle.call_count >= 1 # Should have run at least once
+    assert mock_event_is_set.call_count == num_loops + 1 # Called until it returns True
+    assert manager_instance.shutdown_event.is_set() # Verify the real event was set
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_check_pod_idle_status") # Mock the check it calls
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_after_failure")
+@patch.object(TranscriptionPipelineManager, "_terminate_pods") # Need to mock this as it's called by the handler
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_handles_idle_timeout(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_terminate_pods: MagicMock,
+    mock_handle_wait_fail: MagicMock,
+    mock_check_pod_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test exceeding STATUS_CHECK_TIMEOUT in WAITING_FOR_IDLE leads to failure state."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait (Check=False, time < timeout) -> Wait
+    # 4: Wait (Check=False, time >= timeout -> Terminate called, returns Fail state) -> Fail
+    # 5: WaitFail -> WaitFail (Stop)
+    num_loops = 5
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+
+    # Simulate time: Start, small increments, then jump past STATUS_CHECK_TIMEOUT
+    start_time = 1000.0
+    time_before_timeout = start_time + const.STATUS_CHECK_TIMEOUT - 10
+    time_after_timeout = start_time + const.STATUS_CHECK_TIMEOUT + 10
+    mock_get_current_time.side_effect = [
+        start_time,          # Loop 1 'now'
+        start_time + 1,      # Loop 2 'now'
+        time_before_timeout, # Loop 3 'now' (before timeout)
+        time_after_timeout,  # Loop 4 'now' (after timeout)
+        time_after_timeout + 1, # Loop 5 'now'
+        time_after_timeout + 2, # Extra
+    ]
+
+    # --- Mock State Transitions ---
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+    # Mock the check called by the real _handle_waiting_for_idle to always return False (not idle)
+    mock_check_pod_idle.return_value = False
+    # Stay in failure state once reached
+    mock_handle_wait_fail.return_value = const.STATE_WAITING_AFTER_FAILURE
+    # --- End Mock ---
+
+    # We need to let the *real* _handle_waiting_for_idle run to test its timeout logic
+    with patch.object(manager_instance, '_handle_waiting_for_idle', wraps=manager_instance._handle_waiting_for_idle) as spy_handle_wait_idle:
+        manager_instance.run() # Call directly
+
+    # Assertions
+    assert spy_handle_wait_idle.call_count >= 2 # Called in loop 3 and 4
+    # Check idle status is called when interval is met (Loop 3 time vs Loop 2 time)
+    # The check happens if now - last_idle_check >= interval.
+    # Loop 3 now = time_before_timeout. last_idle_check initially 0. Interval met.
+    # Loop 4 now = time_after_timeout. last_idle_check updated in loop 3 to time_before_timeout. Interval met.
+    assert mock_check_pod_idle.call_count >= 1 # Should be called in loop 3 and maybe 4 depending on exact timing
+    mock_terminate_pods.assert_called_once() # Called by handler in loop 4 due to timeout
+    assert mock_handle_wait_fail.call_count >= 1 # Called in loop 5
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_after_failure")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_handles_pod_start_failure(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_handle_wait_fail: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test failure during pod start transitions to WAITING_AFTER_FAILURE."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Fail
+    # 3: WaitFail -> WaitFail (Stop)
+    num_loops = 3
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+    mock_get_current_time.side_effect = [1000.0 + i for i in range(num_loops + 1)]
+
+    # --- Mock State Transitions ---
+    start_time = 1000.0
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    # Simulate failure in pod start handler
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_AFTER_FAILURE, "", "")
+    # Stay in failure state
+    mock_handle_wait_fail.return_value = const.STATE_WAITING_AFTER_FAILURE
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assert handlers were called
+    mock_handle_start_cycle.assert_called_once()
+    mock_handle_attempt_start.assert_called_once()
+    assert mock_handle_wait_fail.call_count >= 1
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_trigger_pipeline_run") # Mock the trigger it calls
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_after_failure")
+@patch.object(TranscriptionPipelineManager, "_terminate_pods") # Called on failure
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_handles_pipeline_trigger_failure(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_terminate_pods: MagicMock,
+    mock_handle_wait_fail: MagicMock,
+    mock_trigger_pipeline: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test failure during pipeline trigger transitions to WAITING_AFTER_FAILURE."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait -> Run
+    # 4: Run (Trigger=False -> Terminate called, returns Fail state) -> Fail
+    # 5: WaitFail -> WaitFail (Stop)
+    num_loops = 5
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+    mock_get_current_time.side_effect = [1000.0 + i for i in range(num_loops + 1)]
+
+    # --- Mock State Transitions ---
+    start_time = 1000.0
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+    mock_handle_wait_idle.return_value = (const.STATE_ATTEMPTING_PIPELINE_RUN, start_time + 1)
+    # Simulate failure in the trigger function called by the real handler
+    mock_trigger_pipeline.return_value = False
+    # Stay in failure state
+    mock_handle_wait_fail.return_value = const.STATE_WAITING_AFTER_FAILURE
+    # --- End Mock ---
+
+    # Let the real _handle_attempting_pipeline_run execute
+    with patch.object(manager_instance, '_handle_attempting_pipeline_run', wraps=manager_instance._handle_attempting_pipeline_run) as spy_handle_attempt_run:
+        manager_instance.run() # Call directly
+
+    # Assert handlers were called
+    mock_handle_start_cycle.assert_called_once()
+    mock_handle_attempt_start.assert_called_once()
+    mock_handle_wait_idle.assert_called_once()
+    spy_handle_attempt_run.assert_called_once() # Check the real handler ran
+    mock_trigger_pipeline.assert_called_once() # Check the trigger was called by the real handler
+    mock_terminate_pods.assert_called_once() # Check terminate was called by the real handler
+    assert mock_handle_wait_fail.call_count >= 1 # Check we entered the failure state
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pipeline_run")
+@patch.object(TranscriptionPipelineManager, "_handle_updating_counts")
+@patch.object(TranscriptionPipelineManager, "_update_pod_counts") # Mock the helper
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_handles_count_update_interval(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_update_counts_helper: MagicMock,
+    mock_handle_updating: MagicMock,
+    mock_handle_attempt_run: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test _update_pod_counts is called based on COUNT_UPDATE_INTERVAL."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait -> Run
+    # 4: Run -> Update
+    # 5: Update (time < interval) -> Update
+    # 6: Update (time >= interval) -> Update (calls helper)
+    # 7: Update (time < interval) -> Update (Stop)
+    num_loops = 7
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+
+    # Simulate time: Start, small increments, then jump past COUNT_UPDATE_INTERVAL
+    start_time = 1000.0
+    time_before_interval = start_time + const.COUNT_UPDATE_INTERVAL - 10
+    time_after_interval = start_time + const.COUNT_UPDATE_INTERVAL + 10
+    mock_get_current_time.side_effect = [
+        start_time,           # Loop 1
+        start_time + 1,       # Loop 2
+        start_time + 2,       # Loop 3
+        start_time + 3,       # Loop 4
+        time_before_interval, # Loop 5 (Update state starts, interval not met)
+        time_after_interval,  # Loop 6 (Interval met)
+        time_after_interval + 1, # Loop 7 (Interval not met again)
+        time_after_interval + 2, # Extra
+    ]
+
+    # --- Mock State Transitions ---
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
+    mock_handle_wait_idle.return_value = (const.STATE_ATTEMPTING_PIPELINE_RUN, start_time + 1)
+    mock_handle_attempt_run.return_value = const.STATE_UPDATING_COUNTS # Enters UPDATE state in loop 5
+
+    # Mock _handle_updating_counts with a side_effect to control interval logic
+    # but force state to remain UPATING_COUNTS
+    def handle_updating_side_effect(now, last_count_update_time_arg):
+        next_state = const.STATE_UPDATING_COUNTS
+        time_to_return = now # Initialize time on first entry
+
+        if last_count_update_time_arg > 0.0: # Check only if initialized
+            time_to_return = last_count_update_time_arg # Default to old time if initialized
+            if now - last_count_update_time_arg >= const.COUNT_UPDATE_INTERVAL:
+                mock_update_counts_helper()
+                time_to_return = now # Update time only if interval met
+
+        return next_state, time_to_return
+
+    mock_handle_updating.side_effect = handle_updating_side_effect
+    # Don't need return_value for helper if just checking call count
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assertions
+    assert mock_handle_updating.call_count >= 3 # Loops 5, 6, 7
+    # _update_pod_counts should only be called when interval is met (Loop 6)
+    mock_update_counts_helper.assert_called_once()
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_handle_attempting_pod_start")
+@patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
+@patch.object(TranscriptionPipelineManager, "_check_pod_idle_status") # Mock the helper
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_handles_idle_check_interval(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_check_idle_helper: MagicMock,
+    mock_handle_wait_idle: MagicMock,
+    mock_handle_attempt_start: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mocker: MockerFixture,
+) -> None:
+    """Test _check_pod_idle_status is called based on POD_STATUS_CHECK_INTERVAL."""
+    # Loop sequence:
+    # 1: Start -> Attempt
+    # 2: Attempt -> Wait
+    # 3: Wait (time < interval) -> Wait
+    # 4: Wait (time >= interval) -> Wait (calls helper)
+    # 5: Wait (time < interval) -> Wait (Stop)
+    num_loops = 5
+    mocker.patch.object(manager_instance.shutdown_event, 'is_set', side_effect=[False] * num_loops + [True])
+
+    # Simulate time: Start, small increments, then jump past POD_STATUS_CHECK_INTERVAL
+    start_time = 1000.0
+    time_before_interval = start_time + const.POD_STATUS_CHECK_INTERVAL - 1
+    time_after_interval = start_time + const.POD_STATUS_CHECK_INTERVAL + 1
+    mock_get_current_time.side_effect = [
+        start_time,           # Loop 1
+        start_time + 1,       # Loop 2
+        time_before_interval, # Loop 3 (Wait state starts, interval not met)
+        time_after_interval,  # Loop 4 (Interval met)
+        time_after_interval + 1, # Loop 5 (Interval not met again)
+        time_after_interval + 2, # Extra
+    ]
+
+    # --- Mock State Transitions ---
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url") # Enters WAIT state in loop 3
+
+    # Mock _handle_waiting_for_idle with a side_effect to control interval logic
+    # but force state to remain WAITING_FOR_IDLE
+    def handle_wait_idle_side_effect(now, elapsed, last_idle_check_time_arg, *args):
+        next_state = const.STATE_WAITING_FOR_IDLE
+        time_to_return = now # Initialize time on first entry
+
+        if last_idle_check_time_arg > 0.0: # Check only if initialized
+            time_to_return = last_idle_check_time_arg # Default to old time if initialized
+            if now - last_idle_check_time_arg >= const.POD_STATUS_CHECK_INTERVAL:
+                _ = mock_check_idle_helper(*args[-1:]) # Pass pod_url
+                time_to_return = now # Update time only if interval met
+
+        return next_state, time_to_return
+
+    mock_handle_wait_idle.side_effect = handle_wait_idle_side_effect
+    # Don't need return_value for helper if just checking call count
+    # --- End Mock ---
+
+    manager_instance.run() # Call directly
+
+    # Assertions
+    assert mock_handle_wait_idle.call_count >= 3 # Loops 3, 4, 5
+    # _check_pod_idle_status should only be called when interval is met (Loop 4)
+    mock_check_idle_helper.assert_called_once()
+    mock_shutdown.assert_called_once()
+
+
+@patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
+@patch.object(TranscriptionPipelineManager, "get_current_time")
+@patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
+@patch.object(TranscriptionPipelineManager, "_shutdown")
+@patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
+def test_run_raises_runtimeerror_on_invalid_state(
+    mock_setup_signals: MagicMock,
+    mock_shutdown: MagicMock,
+    mock_handle_start_cycle: MagicMock,
+    mock_get_current_time: MagicMock,
+    mock_sleep: MagicMock,
+    manager_instance: TranscriptionPipelineManager,
+    mock_logger: MagicMock, # Use logger to check for critical error
+    mocker: MockerFixture,
+) -> None:
+    """Test run() catches RuntimeError, logs critical, and shuts down."""
+    shutdown_event = manager_instance.shutdown_event
+    start_time = 1000.0
+    invalid_state = "INVALID_STATE_XYZ"
+
+    # --- Mock State Transitions ---
+    mock_handle_start_cycle.return_value = (invalid_state, start_time, "", "", 0.0, 0.0)
+    # --- End Mock ---
+
+    # Mock time for the first loop iteration
+    mock_get_current_time.return_value = start_time
+    # DO NOT mock shutdown_event.is_set - let the exception handler set the real event
+
+    # Expect RuntimeError to be caught by the main try/except in run()
+    # which logs critically and calls shutdown
+    manager_instance.run() # Call directly
+
+    # Check that the critical log was called (verifies exception handling path)
+    mock_logger.critical.assert_called()
+
+    # Check that the shutdown event was set by the exception handler
+    assert shutdown_event.is_set()
+    mock_shutdown.assert_called_once()
 
 
 # _shutdown
