@@ -22,7 +22,7 @@ dependencies = [
     "pyaml-env",
     "requests",
     # "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@v0.1.1",
-    "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@3fc6b4e760b96120bc7026b9eae4e1d1542f4aff",
+    "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@f2ff005db71ccae8503769e792c236f91f270002",
 ]
 
 [project.scripts]
