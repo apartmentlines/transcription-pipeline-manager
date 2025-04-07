@@ -445,7 +445,7 @@ def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, m
 def test_handle_attempting_pod_start_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
     """Test _handle_attempting_pod_start success path."""
     mock_start_manager, _ = mock_runpod_manager
-    mock_start_manager.run.return_value = {'id': TEST_POD_ID}
+    mock_start_manager.run.return_value = TEST_POD_ID
     expected_url = const.POD_URL_TEMPLATE % TEST_POD_ID
 
     with patch.object(manager_instance, '_terminate_pods') as mock_terminate:

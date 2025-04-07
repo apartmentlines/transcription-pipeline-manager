@@ -233,9 +233,9 @@ class TranscriptionPipelineManager:
         pod_id = ""
         pod_url = ""
         try:
-            pod_info = self.runpod_start_manager.run()
-            if pod_info and isinstance(pod_info, dict) and 'id' in pod_info:
-                pod_id = pod_info['id']
+            pod_id_return_value = self.runpod_start_manager.run()
+            if pod_id_return_value:
+                pod_id = str(pod_id_return_value)
                 pod_url = POD_URL_TEMPLATE % pod_id
                 self.log.info(f"Pod {pod_id} confirmed running/started. URL: {pod_url}")
                 next_state = STATE_WAITING_FOR_IDLE
