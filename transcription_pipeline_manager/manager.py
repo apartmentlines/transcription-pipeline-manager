@@ -56,6 +56,11 @@ class TranscriptionPipelineManager:
         self.transcription_subdomain: str = f"my.{self.domain}"
         self.logs_callback_url: str = self.build_logs_callback_url()
         self.debug: bool = debug
+        # Initialize dependencies (will be properly instantiated later if needed)
+        self.rest_interface: RestInterface | None = None
+        self.runpod_start_manager: RunpodSingletonManager | None = None
+        self.runpod_terminate_manager: RunpodSingletonManager | None = None
+        self.shutdown_event: threading.Event = threading.Event()
 
     def build_logs_callback_url(self) -> str:
         return f"https://{self.callback_url_subdomain}/api/transcription/logs?api_key={self.api_key}"
@@ -105,6 +110,63 @@ class TranscriptionPipelineManager:
             return False
         except RequestException as e:
             self.log.error(f"Error requesting pod status from {status_url}: {e}", exc_info=self.debug)
+            return False
+
+    def _process_trigger_pipeline_run_response(self, run_url: str, response: requests.Response) -> bool:
+        """
+        Processes the response from a pipeline run trigger request.
+
+        :param run_url: The URL of the run endpoint
+        :type run_url: str
+        :param response: The response object from the request
+        :type response: requests.Response
+        :return: True if the pipeline run was successfully triggered, False otherwise.
+        :rtype: bool
+        """
+        try:
+            response_data = response.json()
+        except Exception as e:
+            self.log.warning(f"Failed to decode JSON response from {run_url}: {e}.", exc_info=self.debug)
+            return False
+        if "message" in response_data:
+            self.log.info(f"Pipeline run triggered successfully: {response_data['message']}")
+            self.rest_interface.update_pipeline_last_run_time(int(time.time()))
+            return True
+        elif "error" in response_data:
+            self.log.error(f"Pipeline run trigger failed at {run_url}: {response_data['error']}")
+            return False
+        else:
+            self.log.warning(f"Unexpected JSON response format from {run_url}: {response_data}")
+            return False
+
+    def _trigger_pipeline_run(self, pod_url: str) -> bool:
+        """
+        Triggers the transcription pipeline run via a POST request to the pod's /run endpoint.
+
+        :param pod_url: The base URL of the pod
+        :type pod_url: str
+        :return: True if the pipeline run was successfully triggered, False otherwise.
+        :rtype: bool
+        """
+        run_url = f"{pod_url}/run"
+        payload = {
+            "api_key": self.api_key,
+            "domain": self.transcription_subdomain,
+            "limit": self.limit,
+            "processing_limit": self.processing_limit,
+            "callback_url": self.logs_callback_url,
+        }
+        self.log.info(f"Triggering pipeline run at {run_url}")
+        self.log.debug(f"Payload: {payload}") # Log sensitive data only in debug
+        try:
+            response = requests.post(run_url, json=payload, timeout=POD_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return self._process_trigger_pipeline_run_response(run_url, response)
+        except requests.exceptions.HTTPError as e:
+            self.log.warning(f"Failed to trigger pipeline run at {run_url}. Status: {e.response.status_code} {e.response.reason}")
+            return False
+        except Exception as e:
+            self.log.error(f"Error triggering pipeline run at {run_url}: {e}", exc_info=self.debug)
             return False
 
 
