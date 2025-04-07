@@ -662,6 +662,144 @@ def test_run_initialization_and_immediate_shutdown(
     mock_shutdown.assert_called_once()
 
 
+# Phase 4: Entry Point (main)
+
+@patch("transcription_pipeline_manager.manager.parse_arguments")
+@patch("transcription_pipeline_manager.manager.load_configuration")
+@patch("transcription_pipeline_manager.manager.TranscriptionPipelineManager")
+@patch("transcription_pipeline_manager.manager.fail_hard")
+def test_main_success_flow(
+    mock_fail_hard: MagicMock,
+    mock_manager_cls: MagicMock,
+    mock_load_config: MagicMock,
+    mock_parse_args: MagicMock,
+) -> None:
+    """Test the main function executes the success path correctly."""
+    mock_args = argparse.Namespace(
+        api_key="cli_key", domain="cli.domain", limit=10, processing_limit=2, debug=False
+    )
+    mock_parse_args.return_value = mock_args
+    mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
+    mock_pipeline_instance = MagicMock(spec=TranscriptionPipelineManager)
+    mock_manager_cls.return_value = mock_pipeline_instance
+
+    manager_module.main()
+
+    mock_parse_args.assert_called_once()
+    mock_load_config.assert_called_once_with(mock_args)
+    mock_manager_cls.assert_called_once_with(
+        api_key=TEST_API_KEY,
+        domain=TEST_DOMAIN,
+        limit=mock_args.limit,
+        processing_limit=mock_args.processing_limit,
+        debug=mock_args.debug,
+    )
+    mock_pipeline_instance.run.assert_called_once()
+    mock_fail_hard.assert_not_called()
+
+
+@patch("transcription_pipeline_manager.manager.parse_arguments")
+@patch("transcription_pipeline_manager.manager.load_configuration")
+@patch("transcription_pipeline_manager.manager.TranscriptionPipelineManager")
+@patch("transcription_pipeline_manager.manager.fail_hard")
+@patch("transcription_pipeline_manager.manager.logging.getLogger")
+def test_main_load_config_failure(
+    mock_get_logger: MagicMock,
+    mock_fail_hard: MagicMock,
+    mock_manager_cls: MagicMock,
+    mock_load_config: MagicMock,
+    mock_parse_args: MagicMock,
+) -> None:
+    """Test main function calls fail_hard if load_configuration fails."""
+    mock_args = argparse.Namespace(debug=False) # Need debug flag for logger check
+    mock_parse_args.return_value = mock_args
+    test_exception = ValueError("Missing config")
+    mock_load_config.side_effect = test_exception
+    mock_logger_instance = MagicMock()
+    mock_get_logger.return_value = mock_logger_instance
+
+    manager_module.main()
+
+    mock_parse_args.assert_called_once()
+    mock_load_config.assert_called_once_with(mock_args)
+    mock_manager_cls.assert_not_called()
+    mock_logger_instance.critical.assert_called_once_with(
+        f"Unhandled exception during manager execution: {test_exception}", exc_info=False
+    )
+    mock_fail_hard.assert_called_once_with("Transcription Pipeline Manager failed due to an unhandled exception.")
+
+
+@patch("transcription_pipeline_manager.manager.parse_arguments")
+@patch("transcription_pipeline_manager.manager.load_configuration")
+@patch("transcription_pipeline_manager.manager.TranscriptionPipelineManager")
+@patch("transcription_pipeline_manager.manager.fail_hard")
+@patch("transcription_pipeline_manager.manager.logging.getLogger")
+def test_main_manager_init_failure(
+    mock_get_logger: MagicMock,
+    mock_fail_hard: MagicMock,
+    mock_manager_cls: MagicMock,
+    mock_load_config: MagicMock,
+    mock_parse_args: MagicMock,
+) -> None:
+    """Test main function calls fail_hard if manager initialization fails."""
+    mock_args = argparse.Namespace(
+        api_key="k", domain="d", limit=1, processing_limit=1, debug=True
+    )
+    mock_parse_args.return_value = mock_args
+    mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
+    test_exception = TypeError("Bad init arg")
+    mock_manager_cls.side_effect = test_exception
+    mock_logger_instance = MagicMock()
+    mock_get_logger.return_value = mock_logger_instance
+
+    manager_module.main()
+
+    mock_parse_args.assert_called_once()
+    mock_load_config.assert_called_once()
+    mock_manager_cls.assert_called_once()
+    mock_logger_instance.critical.assert_called_once_with(
+         f"Unhandled exception during manager execution: {test_exception}", exc_info=True
+    )
+    mock_fail_hard.assert_called_once_with("Transcription Pipeline Manager failed due to an unhandled exception.")
+
+
+@patch("transcription_pipeline_manager.manager.parse_arguments")
+@patch("transcription_pipeline_manager.manager.load_configuration")
+@patch("transcription_pipeline_manager.manager.TranscriptionPipelineManager")
+@patch("transcription_pipeline_manager.manager.fail_hard")
+@patch("transcription_pipeline_manager.manager.logging.getLogger")
+def test_main_manager_run_failure(
+    mock_get_logger: MagicMock,
+    mock_fail_hard: MagicMock,
+    mock_manager_cls: MagicMock,
+    mock_load_config: MagicMock,
+    mock_parse_args: MagicMock,
+) -> None:
+    """Test main function calls fail_hard if pipeline.run() fails."""
+    mock_args = argparse.Namespace(
+        api_key="k", domain="d", limit=1, processing_limit=1, debug=False
+    )
+    mock_parse_args.return_value = mock_args
+    mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
+    mock_pipeline_instance = MagicMock(spec=TranscriptionPipelineManager)
+    test_exception = ConnectionError("Network down")
+    mock_pipeline_instance.run.side_effect = test_exception
+    mock_manager_cls.return_value = mock_pipeline_instance
+    mock_logger_instance = MagicMock()
+    mock_get_logger.return_value = mock_logger_instance
+
+    manager_module.main()
+
+    mock_parse_args.assert_called_once()
+    mock_load_config.assert_called_once()
+    mock_manager_cls.assert_called_once()
+    mock_pipeline_instance.run.assert_called_once()
+    mock_logger_instance.critical.assert_called_once_with(
+         f"Unhandled exception during manager execution: {test_exception}", exc_info=False
+    )
+    mock_fail_hard.assert_called_once_with("Transcription Pipeline Manager failed due to an unhandled exception.")
+
+
 @patch.object(TranscriptionPipelineManager, "sleep", return_value=None)
 @patch.object(TranscriptionPipelineManager, "get_current_time")
 @patch.object(TranscriptionPipelineManager, "_handle_starting_cycle")
