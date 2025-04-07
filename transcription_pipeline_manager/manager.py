@@ -122,7 +122,6 @@ class TranscriptionPipelineManager:
         self.log.debug("RunPod Terminate Manager initialized.")
 
         self.shutdown_event: threading.Event = threading.Event()
-        self.current_state: str = ""
         self.log.debug("Shutdown event initialized.")
         self.log.info("Transcription Pipeline Manager initialization complete.")
 
@@ -141,7 +140,7 @@ class TranscriptionPipelineManager:
         self._setup_signal_handlers()
         self.rest_interface.start()
 
-        self.current_state = STATE_STARTING_CYCLE
+        current_state: str = STATE_STARTING_CYCLE
         cycle_start_time: float = 0.0
         pod_id: str = ""
         pod_url: str = ""
@@ -154,37 +153,37 @@ class TranscriptionPipelineManager:
                 elapsed_cycle_time = now - cycle_start_time if cycle_start_time > 0 else 0
 
                 # --- Time-Based Cycle Reset ---
-                if self.current_state != STATE_STARTING_CYCLE and elapsed_cycle_time >= CYCLE_DURATION:
+                if current_state != STATE_STARTING_CYCLE and elapsed_cycle_time >= CYCLE_DURATION:
                     self.log.info(f"Hourly cycle duration ({CYCLE_DURATION}s) reached. Resetting cycle.")
-                    self.current_state = STATE_STARTING_CYCLE
+                    current_state = STATE_STARTING_CYCLE
                     # Pod termination is handled by pod itself or next start cycle
 
                 # --- State Dispatch ---
-                if self.current_state == STATE_STARTING_CYCLE:
-                    self.current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time = self._handle_starting_cycle(now)
+                if current_state == STATE_STARTING_CYCLE:
+                    current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time = self._handle_starting_cycle(now)
 
-                if self.current_state == STATE_ATTEMPTING_POD_START:
-                    self.current_state, pod_id, pod_url = self._handle_attempting_pod_start()
+                if current_state == STATE_ATTEMPTING_POD_START:
+                    current_state, pod_id, pod_url = self._handle_attempting_pod_start()
 
-                if self.current_state == STATE_WAITING_FOR_IDLE:
-                    self.current_state, last_idle_check_time = self._handle_waiting_for_idle(
+                if current_state == STATE_WAITING_FOR_IDLE:
+                    current_state, last_idle_check_time = self._handle_waiting_for_idle(
                         now, elapsed_cycle_time, last_idle_check_time, pod_id, pod_url
                     )
 
-                if self.current_state == STATE_ATTEMPTING_PIPELINE_RUN:
-                    self.current_state = self._handle_attempting_pipeline_run(pod_id, pod_url)
+                if current_state == STATE_ATTEMPTING_PIPELINE_RUN:
+                    current_state = self._handle_attempting_pipeline_run(pod_id, pod_url)
 
-                if self.current_state == STATE_UPDATING_COUNTS:
-                    self.current_state, last_count_update_time = self._handle_updating_counts(
+                if current_state == STATE_UPDATING_COUNTS:
+                    current_state, last_count_update_time = self._handle_updating_counts(
                         now, last_count_update_time
                     )
 
-                if self.current_state == STATE_WAITING_AFTER_FAILURE:
-                    self.current_state = self._handle_waiting_after_failure(elapsed_cycle_time)
+                if current_state == STATE_WAITING_AFTER_FAILURE:
+                    current_state = self._handle_waiting_after_failure(elapsed_cycle_time)
 
                 else:
-                    self.log.error(f"Encountered unknown state: {self.current_state}. Resetting cycle.")
-                    self.current_state = STATE_STARTING_CYCLE
+                    self.log.error(f"Encountered unknown or invalid state: {current_state}. Resetting cycle.")
+                    current_state = STATE_STARTING_CYCLE
 
                 # --- End of Loop ---
                 time.sleep(MAIN_LOOP_SLEEP)
