@@ -203,6 +203,29 @@ class TranscriptionPipelineManager:
         except Exception as e:
             self.log.error(f"Failed to retrieve pod counts: {e}", exc_info=self.debug)
 
+    def _setup_signal_handlers(self) -> None:
+        """
+        Registers signal handlers for graceful shutdown (SIGINT, SIGTERM).
+        """
+        self.log.debug("Registering signal handlers for SIGINT and SIGTERM.")
+        signal.signal(signal.SIGINT, self._handle_shutdown_signal)
+        signal.signal(signal.SIGTERM, self._handle_shutdown_signal)
+
+    def _handle_shutdown_signal(self, signum: int, _frame: Any) -> None:
+        """
+        Signal handler function to initiate graceful shutdown.
+
+        Sets the shutdown_event when SIGINT or SIGTERM is received.
+
+        :param signum: The signal number received.
+        :type signum: int
+        :param frame: The current stack frame (unused).
+        :type frame: Any
+        """
+        signal_name = signal.Signals(signum).name
+        self.log.info(f"Received signal {signal_name}. Initiating graceful shutdown...")
+        self.shutdown_event.set()
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

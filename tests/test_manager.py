@@ -3,6 +3,7 @@ import logging
 import time
 import json
 import threading
+import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 from typing import Any
@@ -337,6 +338,30 @@ def test_update_pod_counts_invalid_dict(invalid_counts: Any, manager_instance: T
     mock_logger.warning.assert_called_once_with("Did not receive valid pod counts from RunpodSingletonManager.")
     mock_rest_interface.update_pods_total.assert_not_called()
     mock_rest_interface.update_pods_running.assert_not_called()
+
+
+# _setup_signal_handlers & _handle_shutdown_signal
+@patch("transcription_pipeline_manager.manager.signal.signal")
+def test_setup_signal_handlers(mock_signal: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _setup_signal_handlers registers handlers for SIGINT and SIGTERM."""
+    manager_instance._setup_signal_handlers()
+
+    expected_calls = [
+        call(signal.SIGINT, manager_instance._handle_shutdown_signal),
+        call(signal.SIGTERM, manager_instance._handle_shutdown_signal),
+    ]
+    mock_signal.assert_has_calls(expected_calls, any_order=True)
+    assert mock_signal.call_count == 2
+
+
+def test_handle_shutdown_signal(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_shutdown_signal sets the shutdown event and logs."""
+    assert not manager_instance.shutdown_event.is_set()
+    manager_instance._handle_shutdown_signal(signal.SIGINT, None)
+    assert manager_instance.shutdown_event.is_set()
+    manager_instance.shutdown_event.clear()
+    manager_instance._handle_shutdown_signal(signal.SIGTERM, None)
+    assert manager_instance.shutdown_event.is_set()
 
 
 @patch("transcription_pipeline_manager.manager.requests.post")
