@@ -425,6 +425,215 @@ def test_trigger_pipeline_run_api_error(mock_post: MagicMock, manager_instance: 
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
 
+# Phase 3: State Handler Unit Tests (_handle_...)
+
+def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_starting_cycle returns correct initial state values."""
+    now = time.time()
+    next_state, cycle_start_time, pod_id, pod_url, last_count, last_idle = manager_instance._handle_starting_cycle(now)
+
+    assert next_state == const.STATE_ATTEMPTING_POD_START
+    assert cycle_start_time == now
+    assert pod_id == ""
+    assert pod_url == ""
+    assert last_count == 0.0
+    assert last_idle == 0.0
+    mock_logger.info.assert_called_with("Starting new hourly cycle.")
+
+
+def test_handle_attempting_pod_start_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _handle_attempting_pod_start success path."""
+    mock_start_manager, _ = mock_runpod_manager
+    mock_start_manager.run.return_value = {'id': TEST_POD_ID}
+    expected_url = const.POD_URL_TEMPLATE % TEST_POD_ID
+
+    with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+        next_state, pod_id, pod_url = manager_instance._handle_attempting_pod_start()
+
+    assert next_state == const.STATE_WAITING_FOR_IDLE
+    assert pod_id == TEST_POD_ID
+    assert pod_url == expected_url
+    mock_start_manager.run.assert_called_once()
+    mock_terminate.assert_not_called()
+
+
+def test_handle_attempting_pod_start_failure_no_pod_info(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _handle_attempting_pod_start failure when runpod manager returns None."""
+    mock_start_manager, _ = mock_runpod_manager
+    mock_start_manager.run.return_value = None
+
+    with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+        next_state, pod_id, pod_url = manager_instance._handle_attempting_pod_start()
+
+    assert next_state == const.STATE_WAITING_AFTER_FAILURE
+    assert pod_id == ""
+    assert pod_url == ""
+    mock_start_manager.run.assert_called_once()
+    mock_terminate.assert_called_once()
+
+
+def test_handle_attempting_pod_start_failure_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _handle_attempting_pod_start failure on exception."""
+    mock_start_manager, _ = mock_runpod_manager
+    test_exception = Exception("API Error")
+    mock_start_manager.run.side_effect = test_exception
+
+    with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+        next_state, pod_id, pod_url = manager_instance._handle_attempting_pod_start()
+
+    assert next_state == const.STATE_WAITING_AFTER_FAILURE
+    assert pod_id == ""
+    assert pod_url == ""
+    mock_start_manager.run.assert_called_once()
+    mock_terminate.assert_called_once()
+
+
+def test_handle_waiting_for_idle_timeout(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_waiting_for_idle timeout condition."""
+    now = time.time()
+    elapsed_cycle_time = const.STATUS_CHECK_TIMEOUT + 1
+    last_idle_check_time = now - 10 # Arbitrary time before now
+
+    with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+        next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
+            now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+        )
+
+    assert next_state == const.STATE_WAITING_AFTER_FAILURE
+    assert updated_last_idle == last_idle_check_time # Time should not update on timeout
+    mock_terminate.assert_called_once()
+
+
+def test_handle_waiting_for_idle_interval_not_reached(manager_instance: TranscriptionPipelineManager) -> None:
+    """Test _handle_waiting_for_idle when check interval is not reached."""
+    now = time.time()
+    elapsed_cycle_time = 100
+    last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL / 2) # Interval not reached
+
+    with patch.object(manager_instance, '_check_pod_idle_status') as mock_check_idle:
+        with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+            next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
+                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+            )
+
+    assert next_state == const.STATE_WAITING_FOR_IDLE
+    assert updated_last_idle == last_idle_check_time # Time should not update
+    mock_check_idle.assert_not_called()
+    mock_terminate.assert_not_called()
+
+
+def test_handle_waiting_for_idle_check_not_idle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_waiting_for_idle when pod check returns not idle."""
+    now = time.time()
+    elapsed_cycle_time = 100
+    last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL * 2) # Interval reached
+
+    with patch.object(manager_instance, '_check_pod_idle_status', return_value=False) as mock_check_idle:
+        with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+            next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
+                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+            )
+
+    assert next_state == const.STATE_WAITING_FOR_IDLE
+    assert updated_last_idle == now # Time should update
+    mock_check_idle.assert_called_once_with(TEST_POD_URL)
+    mock_terminate.assert_not_called()
+
+
+def test_handle_waiting_for_idle_check_is_idle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_waiting_for_idle when pod check returns idle."""
+    now = time.time()
+    elapsed_cycle_time = 100
+    last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL * 2) # Interval reached
+
+    with patch.object(manager_instance, '_check_pod_idle_status', return_value=True) as mock_check_idle:
+        with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+            next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
+                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+            )
+
+    assert next_state == const.STATE_ATTEMPTING_PIPELINE_RUN
+    assert updated_last_idle == now # Time should update
+    mock_check_idle.assert_called_once_with(TEST_POD_URL)
+    mock_terminate.assert_not_called()
+
+
+def test_handle_attempting_pipeline_run_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_attempting_pipeline_run success path."""
+    with patch.object(manager_instance, '_trigger_pipeline_run', return_value=True) as mock_trigger:
+        with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+            next_state = manager_instance._handle_attempting_pipeline_run(TEST_POD_ID, TEST_POD_URL)
+
+    assert next_state == const.STATE_UPDATING_COUNTS
+    mock_trigger.assert_called_once_with(TEST_POD_URL)
+    mock_terminate.assert_not_called()
+
+
+def test_handle_attempting_pipeline_run_failure(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_attempting_pipeline_run failure path."""
+    with patch.object(manager_instance, '_trigger_pipeline_run', return_value=False) as mock_trigger:
+        with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
+            next_state = manager_instance._handle_attempting_pipeline_run(TEST_POD_ID, TEST_POD_URL)
+
+    assert next_state == const.STATE_WAITING_AFTER_FAILURE
+    mock_trigger.assert_called_once_with(TEST_POD_URL)
+    mock_terminate.assert_called_once()
+
+
+def test_handle_updating_counts_interval_not_reached(manager_instance: TranscriptionPipelineManager) -> None:
+    """Test _handle_updating_counts when interval is not reached."""
+    now = time.time()
+    last_count_update_time = now - (const.COUNT_UPDATE_INTERVAL / 2) # Interval not reached
+
+    with patch.object(manager_instance, '_update_pod_counts') as mock_update:
+        next_state, updated_last_count = manager_instance._handle_updating_counts(now, last_count_update_time)
+
+    assert next_state == const.STATE_UPDATING_COUNTS
+    assert updated_last_count == last_count_update_time # Time should not update
+    mock_update.assert_not_called()
+
+
+def test_handle_updating_counts_interval_reached_update_success(manager_instance: TranscriptionPipelineManager) -> None:
+    """Test _handle_updating_counts when interval reached and update succeeds."""
+    now = time.time()
+    last_count_update_time = now - (const.COUNT_UPDATE_INTERVAL * 2) # Interval reached
+
+    with patch.object(manager_instance, '_update_pod_counts', return_value=True) as mock_update:
+        next_state, updated_last_count = manager_instance._handle_updating_counts(now, last_count_update_time)
+
+    assert next_state == const.STATE_UPDATING_COUNTS
+    assert updated_last_count == now # Time should update
+    mock_update.assert_called_once()
+
+
+def test_handle_updating_counts_interval_reached_update_failure(manager_instance: TranscriptionPipelineManager) -> None:
+    """Test _handle_updating_counts when interval reached and update fails."""
+    now = time.time()
+    last_count_update_time = now - (const.COUNT_UPDATE_INTERVAL * 2) # Interval reached
+
+    with patch.object(manager_instance, '_update_pod_counts', return_value=False) as mock_update:
+        next_state, updated_last_count = manager_instance._handle_updating_counts(now, last_count_update_time)
+
+    assert next_state == const.STATE_UPDATING_COUNTS
+    assert updated_last_count == last_count_update_time # Time should not update
+    mock_update.assert_called_once()
+
+
+def test_handle_waiting_after_failure(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _handle_waiting_after_failure returns correct state and logs."""
+    elapsed_cycle_time = 1000
+    remaining_time = max(0, const.CYCLE_DURATION - elapsed_cycle_time)
+
+    next_state = manager_instance._handle_waiting_after_failure(elapsed_cycle_time)
+
+    assert next_state == const.STATE_WAITING_AFTER_FAILURE
+    mock_logger.debug.assert_called_with(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+
+
+# Phase 3: run() Method Integration Tests
+
+
+
 # _shutdown
 def test_shutdown_calls_rest_interface_shutdown(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
     """Test _shutdown calls shutdown on the RestInterface instance."""
