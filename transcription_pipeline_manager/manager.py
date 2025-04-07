@@ -39,42 +39,96 @@ from transcription_pipeline_manager.constants import (
 
 
 class TranscriptionPipelineManager:
+    """
+    Manages the lifecycle of a transcription pipeline running on a RunPod pod.
+
+    This class orchestrates starting a pod, waiting for it to become idle,
+    triggering a processing run, monitoring its status (via REST interface updates),
+    and handling cleanup, all within a defined hourly cycle.
+    """
     def __init__(
         self,
-        api_key: str | None = None,
-        domain: str | None = None,
-        limit: int | None = DEFAULT_TRANSCRIPTION_LIMIT,
-        processing_limit: int | None = DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
+        api_key: str,
+        domain: str,
+        limit: int = DEFAULT_TRANSCRIPTION_LIMIT,
+        processing_limit: int = DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
         debug: bool = False,
     ) -> None:
-        self.log: logging.Logger = Logger(self.__class__.__name__, debug=debug)
-        self.api_key: str | None = api_key
-        self.domain: str | None = domain
-        self.limit: int | None = limit
-        self.processing_limit: int | None = processing_limit
+        """
+        Initializes the TranscriptionPipelineManager.
+
+        Sets up configuration, logging, REST interface, RunPod managers,
+        and the shutdown event mechanism.
+
+        :param api_key: The API key for accessing protected endpoints and services.
+        :type api_key: str
+        :param domain: The base domain used for constructing service URLs.
+        :type domain: str
+        :param limit: The maximum number of items to process in a pipeline run.
+        :type limit: int
+        :param processing_limit: The concurrency limit for processing within the pipeline.
+        :type processing_limit: int
+        :param debug: Flag to enable debug logging throughout the manager and its components.
+        :type debug: bool
+        """
+        self.api_key: str = api_key
+        self.domain: str = domain
+        self.limit: int = limit
+        self.processing_limit: int = processing_limit
+        self.debug: bool = debug
+
+        self.log: logging.Logger = Logger(self.__class__.__name__, debug=self.debug)
+        self.log.info("Initializing Transcription Pipeline Manager...")
+
         self.callback_url_subdomain: str = f"www.{self.domain}"
         self.transcription_subdomain: str = f"my.{self.domain}"
-        self.logs_callback_url: str = self.build_logs_callback_url()
-        self.debug: bool = debug
-        # Initialize dependencies (will be properly instantiated later if needed)
-        self.rest_interface: RestInterface | None = None
-        self.runpod_start_manager: RunpodSingletonManager | None = None
-        self.runpod_terminate_manager: RunpodSingletonManager | None = None
-        self.shutdown_event: threading.Event = threading.Event()
+        self.logs_callback_url: str = self._build_logs_callback_url()
+        self.log.debug(f"Callback URL Subdomain: {self.callback_url_subdomain}")
+        self.log.debug(f"Transcription Subdomain: {self.transcription_subdomain}")
+        self.log.debug(f"Logs Callback URL: {self.logs_callback_url}")
 
-    def build_logs_callback_url(self) -> str:
+        base_path = Path(__file__).parent.parent
+        self.runpod_config_path: Path = base_path / RUNPOD_CONFIG_DIR / RUNPOD_CONFIG_FILENAME
+        self.log.debug(f"RunPod config path: {self.runpod_config_path}")
+
+        self.rest_interface: RestInterface = RestInterface(
+            host=DEFAULT_REST_HOST,
+            port=DEFAULT_REST_PORT,
+            api_key=self.api_key,
+            debug=self.debug
+        )
+        self.log.debug("REST Interface initialized.")
+
+        self.runpod_start_manager: RunpodSingletonManager = RunpodSingletonManager(
+            config_path=self.runpod_config_path,
+            api_key=self.api_key,
+            debug=self.debug,
+        )
+        self.log.debug("RunPod Start Manager initialized.")
+        self.runpod_terminate_manager: RunpodSingletonManager = RunpodSingletonManager(
+            config_path=self.runpod_config_path,
+            api_key=self.api_key,
+            debug=self.debug,
+            terminate=True
+        )
+        self.log.debug("RunPod Terminate Manager initialized.")
+
+        self.shutdown_event: threading.Event = threading.Event()
+        self.log.debug("Shutdown event initialized.")
+        self.log.info("Transcription Pipeline Manager initialization complete.")
+
+    def _build_logs_callback_url(self) -> str:
+        """Constructs the URL for the REST interface's log endpoint."""
         return f"https://{self.callback_url_subdomain}/api/transcription/logs?api_key={self.api_key}"
 
-    def setup_configuration(self) -> None:
-        self.log.debug("Setting up configuration")
-        if not self.api_key or not self.domain:
-            fail_hard("API key and domain must be provided")
-        set_environment_variables(self.api_key, self.domain)
-        self.log.info("Configuration loaded successfully")
-
     def run(self) -> None:
-        self.log.info("Starting transcription pipeline manager")
-        self.setup_configuration()
+        """
+        The main execution method that starts the manager's control loop.
+
+        Initializes signal handling, starts the REST interface, and runs the
+        state machine loop until a shutdown signal is received.
+        """
+        self.log.info("Starting transcription pipeline manager run loop...")
         # TODO: Implement the main loop in run()
 
     # --- Helper Methods ---
@@ -92,7 +146,7 @@ class TranscriptionPipelineManager:
         self.log.debug(f"Checking pod status at {status_url}")
         try:
             response = requests.get(status_url, timeout=POD_REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             try:
                 status_data = response.json()
                 if isinstance(status_data, dict) and status_data.get("status") == "idle":
@@ -130,7 +184,7 @@ class TranscriptionPipelineManager:
             return False
         if "message" in response_data:
             self.log.info(f"Pipeline run triggered successfully: {response_data['message']}")
-            self.rest_interface.update_pipeline_last_run_time(int(time.time()))
+            self.rest_interface.update_pipeline_last_run_time(int(time.time())) # Update REST interface stats on successful trigger
             return True
         elif "error" in response_data:
             self.log.error(f"Pipeline run trigger failed at {run_url}: {response_data['error']}")
@@ -157,7 +211,7 @@ class TranscriptionPipelineManager:
             "callback_url": self.logs_callback_url,
         }
         self.log.info(f"Triggering pipeline run at {run_url}")
-        self.log.debug(f"Payload: {payload}") # Log sensitive data only in debug
+        self.log.debug(f"Payload: {payload}")
         try:
             response = requests.post(run_url, json=payload, timeout=POD_REQUEST_TIMEOUT)
             response.raise_for_status()
@@ -176,10 +230,12 @@ class TranscriptionPipelineManager:
         """
         self.log.info("Attempting to terminate any existing pods...")
         try:
+            # The terminate manager is configured with stop=True, terminate=True
             result = self.runpod_terminate_manager.run()
             if result:
                 self.log.info("Pod termination/stop process completed.")
             else:
+                # runpod-singleton returns None on failure/no action needed
                 self.log.warning("Pod termination/stop process did not complete successfully.")
         except Exception as e:
             self.log.error(f"An error occurred during pod termination/stop: {e}", exc_info=self.debug)
@@ -279,18 +335,17 @@ def main() -> None:
 
     try:
         api_key, domain = load_configuration(args)
-    except ValueError as e:
-        fail_hard(str(e))
-        return
-
-    pipeline = TranscriptionPipelineManager(
-        api_key=api_key,
-        domain=domain,
-        limit=args.limit,
-        processing_limit=args.processing_limit,
-        debug=args.debug,
-    )
-    pipeline.run()
+        pipeline = TranscriptionPipelineManager(
+            api_key=api_key,
+            domain=domain,
+            limit=args.limit,
+            processing_limit=args.processing_limit,
+            debug=args.debug,
+        )
+        pipeline.run()
+    except Exception as e:
+        logging.getLogger(__name__).critical(f"Unhandled exception during manager execution: {e}", exc_info=args.debug)
+        fail_hard("Transcription Pipeline Manager failed due to an unhandled exception.")
 
 
 if __name__ == "__main__":

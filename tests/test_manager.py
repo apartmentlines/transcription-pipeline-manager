@@ -15,6 +15,7 @@ from requests.exceptions import RequestException
 
 # Modules to test
 from transcription_pipeline_manager import constants as const
+from transcription_pipeline_manager import manager as manager_module
 from transcription_pipeline_manager.manager import TranscriptionPipelineManager
 from transcription_pipeline_manager.rest_interface import RestInterface
 from transcription_pipeline_manager.logger import Logger
@@ -76,17 +77,18 @@ def mock_runpod_manager(mocker: MockerFixture) -> tuple[MagicMock, MagicMock]:
 
 
 @pytest.fixture
-def manager_instance(
-    mock_logger: MagicMock,
-    mock_rest_interface: MagicMock,
-    mock_runpod_manager: tuple[MagicMock, MagicMock],
-    mocker: MockerFixture
-) -> TranscriptionPipelineManager:
-    """Creates a TranscriptionPipelineManager instance with mocked dependencies."""
-    mock_path = MagicMock(spec=Path)
-    mock_path.parent = MagicMock(spec=Path)
-    mock_path.__truediv__ = lambda self, other: mock_path # Mock / operator
-    mocker.patch("transcription_pipeline_manager.manager.Path", return_value=mock_path)
+def manager_instance(mocker: MockerFixture) -> TranscriptionPipelineManager:
+    """
+    Creates a TranscriptionPipelineManager instance for testing helper methods.
+    Mocks dependencies *after* instantiation, as __init__ is tested separately.
+    """
+    mock_logger_instance = MagicMock(spec=logging.Logger)
+    mock_rest_instance = MagicMock(spec=RestInterface)
+    mock_start_manager_instance = MagicMock()
+    mock_terminate_manager_instance = MagicMock()
+
+    real_path = Path
+    mocker.patch("transcription_pipeline_manager.manager.Path", real_path)
 
     manager = TranscriptionPipelineManager(
         api_key=TEST_API_KEY,
@@ -95,22 +97,191 @@ def manager_instance(
         processing_limit=2,
         debug=False,
     )
-    # Replace logger instance created in __init__ with our mock instance if needed
-    # manager.log = mock_logger # Already mocked via class mock
-    # Replace interface/managers created in __init__ with our mocks
-    manager.rest_interface = mock_rest_interface
-    # Replace interface/managers created in __init__ with our mocks
-    manager.rest_interface = mock_rest_interface
-    manager.runpod_start_manager, manager.runpod_terminate_manager = mock_runpod_manager
 
-    # Manually set the config path used in __init__ for verification if needed
-    expected_config_path = mock_path / const.RUNPOD_CONFIG_DIR / const.RUNPOD_CONFIG_FILENAME
-    manager.runpod_config_path = expected_config_path # Store for potential assertions
+    manager.log = mock_logger_instance
+    manager.rest_interface = mock_rest_instance
+    manager.runpod_start_manager = mock_start_manager_instance
+    manager.runpod_terminate_manager = mock_terminate_manager_instance
+
+    mock_rest_instance.update_pods_total = MagicMock()
+    mock_rest_instance.update_pods_running = MagicMock()
+    mock_rest_instance.update_pipeline_last_run_time = MagicMock()
+    mock_rest_instance.start = MagicMock()
+    mock_rest_instance.shutdown = MagicMock()
+    mock_start_manager_instance.run = MagicMock(return_value=TEST_POD_ID)
+    mock_start_manager_instance.count_pods = MagicMock(return_value={'total': 1, 'running': 1})
+    mock_terminate_manager_instance.run = MagicMock(return_value=True)
 
     return manager
 
+# Fixtures specifically for providing the *mocked instances* to helper tests
+# These are needed because the manager_instance fixture now creates mocks internally
+
+@pytest.fixture
+def mock_logger(manager_instance: TranscriptionPipelineManager) -> MagicMock:
+    """Returns the mocked logger instance from the manager_instance fixture."""
+    return manager_instance.log
+
+@pytest.fixture
+def mock_rest_interface(manager_instance: TranscriptionPipelineManager) -> MagicMock:
+    """Returns the mocked RestInterface instance from the manager_instance fixture."""
+    return manager_instance.rest_interface
+
+@pytest.fixture
+def mock_runpod_manager(manager_instance: TranscriptionPipelineManager) -> tuple[MagicMock, MagicMock]:
+    """Returns the mocked RunpodSingletonManager instances from the manager_instance fixture."""
+    return manager_instance.runpod_start_manager, manager_instance.runpod_terminate_manager
+
 
 # --- Test Cases ---
+
+# Phase 2: Initialization (__init__)
+
+@patch("transcription_pipeline_manager.manager.Path")
+@patch("transcription_pipeline_manager.manager.RunpodSingletonManager")
+@patch("transcription_pipeline_manager.manager.RestInterface")
+@patch("transcription_pipeline_manager.manager.Logger")
+def test_manager_init_defaults(
+    mock_logger_cls: MagicMock,
+    mock_rest_interface_cls: MagicMock,
+    mock_runpod_manager_cls: MagicMock,
+    mock_path_cls: MagicMock,
+    mocker: MockerFixture
+) -> None:
+    """Test TranscriptionPipelineManager initialization with default values."""
+    mock_logger_instance = MagicMock(spec=logging.Logger)
+    mock_logger_cls.return_value = mock_logger_instance
+    mock_rest_instance = MagicMock(spec=RestInterface)
+    mock_rest_interface_cls.return_value = mock_rest_instance
+    mock_start_manager_instance = MagicMock()
+    mock_terminate_manager_instance = MagicMock()
+    mock_runpod_manager_cls.side_effect = [mock_start_manager_instance, mock_terminate_manager_instance]
+
+    mock_path_instance = MagicMock(spec=Path)
+    mock_path_instance.parent.parent = mock_path_instance
+    mock_path_instance.__truediv__.return_value = mock_path_instance
+    mock_path_cls.return_value = mock_path_instance
+
+    manager = TranscriptionPipelineManager(
+        api_key=TEST_API_KEY,
+        domain=TEST_DOMAIN,
+    )
+
+    assert manager.api_key == TEST_API_KEY
+    assert manager.domain == TEST_DOMAIN
+    assert manager.limit == const.DEFAULT_TRANSCRIPTION_LIMIT
+    assert manager.processing_limit == const.DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT
+    assert manager.debug is False
+
+    assert manager.callback_url_subdomain == f"www.{TEST_DOMAIN}"
+    assert manager.transcription_subdomain == f"my.{TEST_DOMAIN}"
+    assert manager.logs_callback_url == f"https://www.{TEST_DOMAIN}/api/transcription/logs?api_key={TEST_API_KEY}"
+
+    mock_logger_cls.assert_called_once_with("TranscriptionPipelineManager", debug=False)
+    assert manager.log is mock_logger_instance
+
+    mock_path_cls.assert_called_once_with(manager_module.__file__)
+    expected_config_path = mock_path_instance / const.RUNPOD_CONFIG_DIR / const.RUNPOD_CONFIG_FILENAME
+    assert manager.runpod_config_path == expected_config_path
+
+    mock_rest_interface_cls.assert_called_once_with(
+        host=const.DEFAULT_REST_HOST,
+        port=const.DEFAULT_REST_PORT,
+        api_key=TEST_API_KEY,
+        debug=False
+    )
+    assert manager.rest_interface is mock_rest_instance
+
+    expected_runpod_calls = [
+        call(
+            config_path=expected_config_path,
+            api_key=TEST_API_KEY,
+            debug=False,
+        ),
+        call(
+            config_path=expected_config_path,
+            api_key=TEST_API_KEY,
+            debug=False,
+            terminate=True
+        ),
+    ]
+    mock_runpod_manager_cls.assert_has_calls(expected_runpod_calls)
+    assert mock_runpod_manager_cls.call_count == 2
+    assert manager.runpod_start_manager is mock_start_manager_instance
+    assert manager.runpod_terminate_manager is mock_terminate_manager_instance
+
+    assert isinstance(manager.shutdown_event, threading.Event)
+    assert not manager.shutdown_event.is_set()
+
+
+@patch("transcription_pipeline_manager.manager.Path")
+@patch("transcription_pipeline_manager.manager.RunpodSingletonManager")
+@patch("transcription_pipeline_manager.manager.RestInterface")
+@patch("transcription_pipeline_manager.manager.Logger")
+def test_manager_init_custom_values(
+    mock_logger_cls: MagicMock,
+    mock_rest_interface_cls: MagicMock,
+    mock_runpod_manager_cls: MagicMock,
+    mock_path_cls: MagicMock,
+    mocker: MockerFixture
+) -> None:
+    """Test TranscriptionPipelineManager initialization with custom values."""
+    mock_logger_instance = MagicMock(spec=logging.Logger)
+    mock_logger_cls.return_value = mock_logger_instance
+    mock_rest_instance = MagicMock(spec=RestInterface)
+    mock_rest_interface_cls.return_value = mock_rest_instance
+    mock_start_manager_instance = MagicMock()
+    mock_terminate_manager_instance = MagicMock()
+    mock_runpod_manager_cls.side_effect = [mock_start_manager_instance, mock_terminate_manager_instance]
+    mock_path_instance = MagicMock(spec=Path)
+    mock_path_instance.parent.parent = mock_path_instance
+    mock_path_instance.__truediv__.return_value = mock_path_instance
+    mock_path_cls.return_value = mock_path_instance
+
+    custom_limit = 50
+    custom_processing_limit = 4
+    custom_debug = True
+
+    manager = TranscriptionPipelineManager(
+        api_key=TEST_API_KEY,
+        domain=TEST_DOMAIN,
+        limit=custom_limit,
+        processing_limit=custom_processing_limit,
+        debug=custom_debug,
+    )
+
+    assert manager.api_key == TEST_API_KEY
+    assert manager.domain == TEST_DOMAIN
+    assert manager.limit == custom_limit
+    assert manager.processing_limit == custom_processing_limit
+    assert manager.debug is custom_debug
+
+    mock_logger_cls.assert_called_once_with("TranscriptionPipelineManager", debug=custom_debug)
+
+    mock_rest_interface_cls.assert_called_once_with(
+        host=const.DEFAULT_REST_HOST,
+        port=const.DEFAULT_REST_PORT,
+        api_key=TEST_API_KEY,
+        debug=custom_debug
+    )
+
+    expected_config_path = mock_path_instance / const.RUNPOD_CONFIG_DIR / const.RUNPOD_CONFIG_FILENAME
+    expected_runpod_calls = [
+        call(
+            config_path=expected_config_path,
+            api_key=TEST_API_KEY,
+            debug=custom_debug,
+        ),
+        call(
+            config_path=expected_config_path,
+            api_key=TEST_API_KEY,
+            debug=custom_debug,
+            terminate=True
+        ),
+    ]
+    mock_runpod_manager_cls.assert_has_calls(expected_runpod_calls)
+    assert mock_runpod_manager_cls.call_count == 2
+
 
 # Phase 1: Helper Methods
 
@@ -266,11 +437,8 @@ def test_shutdown_calls_rest_interface_shutdown(manager_instance: TranscriptionP
 def test_shutdown_handles_no_rest_interface(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _shutdown handles the case where RestInterface was not initialized."""
     manager_instance.rest_interface = None
-
     manager_instance._shutdown()
-
-    # No specific assertion for shutdown not being called, as it shouldn't exist
-    mock_logger.info.assert_any_call("REST interface shutdown complete.") # Still logs completion
+    mock_logger.info.assert_any_call("REST interface shutdown complete.")
 
 
 def test_shutdown_handles_rest_interface_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
@@ -284,7 +452,6 @@ def test_shutdown_handles_rest_interface_exception(manager_instance: Transcripti
     mock_logger.error.assert_called_once_with(
         f"Error shutting down REST interface: {test_exception}", exc_info=False
     )
-    # Should still log completion message even if shutdown had an error
     mock_logger.info.assert_any_call("REST interface shutdown complete.")
 
 # _terminate_pods
@@ -355,10 +522,10 @@ def test_update_pod_counts_exception(manager_instance: TranscriptionPipelineMana
 
 
 @pytest.mark.parametrize("invalid_counts", [
-    {'total': 5}, # Missing 'running'
-    {'running': 3}, # Missing 'total'
-    {}, # Empty dict
-    "not a dict", # Wrong type
+    {'total': 5},
+    {'running': 3},
+    {},
+    "not a dict",
 ])
 def test_update_pod_counts_invalid_dict(invalid_counts: Any, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock], mock_rest_interface: MagicMock) -> None:
     """Test _update_pod_counts handles invalid dictionary format from count_pods."""
@@ -389,10 +556,11 @@ def test_setup_signal_handlers(mock_signal: MagicMock, manager_instance: Transcr
 
 def test_handle_shutdown_signal(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_shutdown_signal sets the shutdown event and logs."""
-    assert not manager_instance.shutdown_event.is_set()
+    assert not manager_instance.shutdown_event.is_set() # Ensure it's initially False
     manager_instance._handle_shutdown_signal(signal.SIGINT, None)
     assert manager_instance.shutdown_event.is_set()
     manager_instance.shutdown_event.clear()
+    mock_logger.reset_mock()
     manager_instance._handle_shutdown_signal(signal.SIGTERM, None)
     assert manager_instance.shutdown_event.is_set()
 
