@@ -127,7 +127,7 @@ class TranscriptionPipelineManager:
 
         self.shutdown_event: threading.Event = threading.Event()
         self.log.debug("Shutdown event initialized.")
-        self.log.info("Transcription Pipeline Manager initialization complete.")
+        self.log.debug("Transcription Pipeline Manager initialization complete.")
 
     def _build_logs_callback_url(self) -> str:
         """Constructs the URL for the REST interface's log endpoint."""
@@ -151,7 +151,7 @@ class TranscriptionPipelineManager:
         Initializes signal handling, starts the REST interface, and runs the
         state machine loop until a shutdown signal is received.
         """
-        self.log.info("Starting transcription pipeline manager run loop...")
+        self.log.debug("Starting transcription pipeline manager run loop...")
         self._setup_signal_handlers()
         self.rest_interface.start()
 
@@ -217,7 +217,7 @@ class TranscriptionPipelineManager:
 
     def _handle_starting_cycle(self, now: float) -> tuple[str, float, str, str, float, float]:
         """Handles logic for the STARTING_CYCLE state."""
-        self.log.info("Starting new hourly cycle.")
+        self.log.debug("Starting new hourly cycle.")
         next_state = STATE_ATTEMPTING_POD_START
         cycle_start_time = now
         pod_id = ""
@@ -228,7 +228,7 @@ class TranscriptionPipelineManager:
 
     def _handle_attempting_pod_start(self) -> tuple[str, str, str]:
         """Handles logic for the ATTEMPTING_POD_START state."""
-        self.log.info("Attempting to ensure RunPod pod is running...")
+        self.log.debug("Attempting to ensure RunPod pod is running...")
         next_state = STATE_WAITING_AFTER_FAILURE
         pod_id = ""
         pod_url = ""
@@ -240,7 +240,7 @@ class TranscriptionPipelineManager:
                 self.log.info(f"Pod {pod_id} confirmed running/started. URL: {pod_url}")
                 next_state = STATE_WAITING_FOR_IDLE
             else:
-                self.log.warning("Failed to start or confirm pod is running.")
+                self.log.error("Failed to start or confirm pod is running.")
                 self._terminate_pods()
         except Exception as e:
             self.log.error(f"Error during pod start attempt: {e}", exc_info=self.debug)
@@ -268,7 +268,7 @@ class TranscriptionPipelineManager:
 
     def _handle_attempting_pipeline_run(self, pod_id: str, pod_url: str) -> str:
         """Handles logic for the ATTEMPTING_PIPELINE_RUN state."""
-        self.log.info(f"Attempting to trigger pipeline run on pod {pod_id}...")
+        self.log.debug(f"Attempting to trigger pipeline run on pod {pod_id}...")
         run_triggered = self._trigger_pipeline_run(pod_url)
         if run_triggered:
             self.log.info(f"Pipeline run successfully triggered on pod {pod_id}.")
@@ -292,7 +292,7 @@ class TranscriptionPipelineManager:
     def _handle_waiting_after_failure(self, elapsed_cycle_time: float) -> str:
         """Handles logic for the WAITING_AFTER_FAILURE state."""
         remaining_time = max(0, CYCLE_DURATION - elapsed_cycle_time)
-        self.log.debug(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+        self.log.warning(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
         return STATE_WAITING_AFTER_FAILURE
 
     # --- Core Helper Methods ---
@@ -310,7 +310,7 @@ class TranscriptionPipelineManager:
         self.log.debug(f"Checking pod status at {status_url}")
         try:
             response = requests.get(status_url, timeout=POD_REQUEST_TIMEOUT)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            response.raise_for_status()
             try:
                 status_data = response.json()
                 if isinstance(status_data, dict) and status_data.get("status") == "idle":
@@ -321,10 +321,10 @@ class TranscriptionPipelineManager:
                     self.log.debug(f"Pod at {pod_url} status: {status_value}")
                     return False
             except json.JSONDecodeError:
-                self.log.warning(f"Failed to decode JSON response from {status_url}.", exc_info=self.debug)
+                self.log.error(f"Failed to decode JSON response from {status_url}.", exc_info=self.debug)
                 return False
         except requests.exceptions.HTTPError as e:
-            self.log.warning(f"Failed to get pod status from {status_url}. Status: {e.response.status_code} {e.response.reason}")
+            self.log.error(f"Failed to get pod status from {status_url}. Status: {e.response.status_code} {e.response.reason}")
             return False
         except RequestException as e:
             self.log.error(f"Error requesting pod status from {status_url}: {e}", exc_info=self.debug)
@@ -344,7 +344,7 @@ class TranscriptionPipelineManager:
         try:
             response_data = response.json()
         except Exception as e:
-            self.log.warning(f"Failed to decode JSON response from {run_url}: {e}.", exc_info=self.debug)
+            self.log.error(f"Failed to decode JSON response from {run_url}: {e}.", exc_info=self.debug)
             return False
         if "message" in response_data:
             self.log.info(f"Pipeline run triggered successfully: {response_data['message']}")
@@ -354,7 +354,7 @@ class TranscriptionPipelineManager:
             self.log.error(f"Pipeline run trigger failed at {run_url}: {response_data['error']}")
             return False
         else:
-            self.log.warning(f"Unexpected JSON response format from {run_url}: {response_data}")
+            self.log.error(f"Unexpected JSON response format from {run_url}: {response_data}")
             return False
 
     def _trigger_pipeline_run(self, pod_url: str) -> bool:
@@ -381,7 +381,7 @@ class TranscriptionPipelineManager:
             response.raise_for_status()
             return self._process_trigger_pipeline_run_response(run_url, response)
         except requests.exceptions.HTTPError as e:
-            self.log.warning(f"Failed to trigger pipeline run at {run_url}. Status: {e.response.status_code} {e.response.reason}")
+            self.log.error(f"Failed to trigger pipeline run at {run_url}. Status: {e.response.status_code} {e.response.reason}")
             return False
         except Exception as e:
             self.log.error(f"Error triggering pipeline run at {run_url}: {e}", exc_info=self.debug)
@@ -392,7 +392,7 @@ class TranscriptionPipelineManager:
         Attempts to stop and terminate any existing pods matching the configuration
         using the dedicated RunpodSingletonManager instance.
         """
-        self.log.info("Attempting to terminate any existing pods...")
+        self.log.debug("Attempting to terminate any existing pods...")
         try:
             # The terminate manager is configured with stop=True, terminate=True
             result = self.runpod_terminate_manager.run()
@@ -400,7 +400,7 @@ class TranscriptionPipelineManager:
                 self.log.info("Pod termination/stop process completed.")
             else:
                 # runpod-singleton returns None on failure/no action needed
-                self.log.warning("Pod termination/stop process did not complete successfully.")
+                self.log.error("Pod termination/stop process did not complete successfully.")
         except Exception as e:
             self.log.error(f"An error occurred during pod termination/stop: {e}", exc_info=self.debug)
 
@@ -463,7 +463,7 @@ class TranscriptionPipelineManager:
                 self.log.error(f"Error shutting down REST interface: {e}", exc_info=self.debug)
         else:
             self.log.debug("REST interface was not initialized, nothing to shut down.")
-        self.log.info("REST interface shutdown complete.")
+        self.log.debug("REST interface shutdown complete.")
 
 
 def parse_arguments() -> argparse.Namespace:

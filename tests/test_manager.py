@@ -337,7 +337,7 @@ def test_check_pod_idle_status_http_error(mock_get: MagicMock, manager_instance:
         f"{TEST_POD_URL}/status",
         timeout=const.POD_REQUEST_TIMEOUT
     )
-    mock_logger.warning.assert_called_once_with(
+    mock_logger.error.assert_called_once_with(
         f"Failed to get pod status from {TEST_POD_URL}/status. Status: 500 Internal Server Error"
     )
 
@@ -357,7 +357,7 @@ def test_check_pod_idle_status_json_decode_error(mock_get: MagicMock, manager_in
         f"{TEST_POD_URL}/status",
         timeout=const.POD_REQUEST_TIMEOUT
     )
-    mock_logger.warning.assert_called_once_with(
+    mock_logger.error.assert_called_once_with(
         f"Failed to decode JSON response from {TEST_POD_URL}/status.", exc_info=False
     )
 
@@ -439,7 +439,7 @@ def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, m
     assert pod_url == ""
     assert last_count == 0.0
     assert last_idle == 0.0
-    mock_logger.info.assert_called_with("Starting new hourly cycle.")
+    mock_logger.debug.assert_called_with("Starting new hourly cycle.")
 
 
 def test_handle_attempting_pod_start_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
@@ -628,7 +628,7 @@ def test_handle_waiting_after_failure(manager_instance: TranscriptionPipelineMan
     next_state = manager_instance._handle_waiting_after_failure(elapsed_cycle_time)
 
     assert next_state == const.STATE_WAITING_AFTER_FAILURE
-    mock_logger.debug.assert_called_with(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+    mock_logger.warning.assert_called_with(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
 
 
 # Phase 3: run() Method Integration Tests
@@ -1411,14 +1411,14 @@ def test_shutdown_calls_rest_interface_shutdown(manager_instance: TranscriptionP
     manager_instance._shutdown()
 
     mock_rest_interface.shutdown.assert_called_once()
-    mock_logger.info.assert_any_call("REST interface shutdown complete.")
+    mock_logger.debug.assert_any_call("REST interface shutdown complete.")
 
 
 def test_shutdown_handles_no_rest_interface(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _shutdown handles the case where RestInterface was not initialized."""
     manager_instance.rest_interface = None
     manager_instance._shutdown()
-    mock_logger.info.assert_any_call("REST interface shutdown complete.")
+    mock_logger.debug.assert_any_call("REST interface shutdown complete.")
 
 
 def test_shutdown_handles_rest_interface_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
@@ -1432,7 +1432,7 @@ def test_shutdown_handles_rest_interface_exception(manager_instance: Transcripti
     mock_logger.error.assert_called_once_with(
         f"Error shutting down REST interface: {test_exception}", exc_info=False
     )
-    mock_logger.info.assert_any_call("REST interface shutdown complete.")
+    mock_logger.debug.assert_any_call("REST interface shutdown complete.")
 
 # _terminate_pods
 def test_terminate_pods_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
@@ -1454,7 +1454,7 @@ def test_terminate_pods_failure(manager_instance: TranscriptionPipelineManager, 
     manager_instance._terminate_pods()
 
     mock_terminate_manager.run.assert_called_once()
-    mock_logger.warning.assert_any_call("Pod termination/stop process did not complete successfully.")
+    mock_logger.error.assert_any_call("Pod termination/stop process did not complete successfully.")
 
 
 def test_terminate_pods_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
@@ -1606,7 +1606,7 @@ def test_trigger_pipeline_run_http_error(mock_post: MagicMock, manager_instance:
 
     assert result is False
     mock_post.assert_called_once()
-    mock_logger.warning.assert_called_once_with(
+    mock_logger.error.assert_called_once_with(
         f"Failed to trigger pipeline run at {TEST_POD_URL}/run. Status: 503 Service Unavailable"
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
@@ -1625,7 +1625,7 @@ def test_trigger_pipeline_run_json_decode_error(mock_post: MagicMock, manager_in
 
     assert result is False
     mock_post.assert_called_once()
-    mock_logger.warning.assert_called_once_with(
+    mock_logger.error.assert_called_once_with(
         f"Failed to decode JSON response from {TEST_POD_URL}/run: {json_exception}.", exc_info=False
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
@@ -1644,7 +1644,7 @@ def test_trigger_pipeline_run_unexpected_json(mock_post: MagicMock, manager_inst
 
     assert result is False
     mock_post.assert_called_once()
-    mock_logger.warning.assert_called_once_with(
+    mock_logger.error.assert_called_once_with(
         f"Unexpected JSON response format from {TEST_POD_URL}/run: {json_return_value}"
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
