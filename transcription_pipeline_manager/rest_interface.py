@@ -268,11 +268,11 @@ class RestInterface:
             # due to app.run blocking nature. The daemon=True is the primary exit mechanism.
             self.thread.join(timeout=2.0)
             if self.thread.is_alive():
-                self.log.info("Callback server thread did not join within timeout (expected with app.run).")
+                self.log.debug("Callback server thread did not join within timeout (expected with app.run).")
             else:
-                self.log.info("Callback server thread joined.")
+                self.log.debug("Callback server thread joined.")
         else:
-            self.log.info("Callback server thread was not running or already finished.")
+            self.log.debug("Callback server thread was not running or already finished.")
         self.thread = None
 
     def update_pods_total(self, count: int) -> None:
