@@ -169,6 +169,21 @@ class TranscriptionPipelineManager:
             self.log.error(f"Error triggering pipeline run at {run_url}: {e}", exc_info=self.debug)
             return False
 
+    def _terminate_pods(self) -> None:
+        """
+        Attempts to stop and terminate any existing pods matching the configuration
+        using the dedicated RunpodSingletonManager instance.
+        """
+        self.log.info("Attempting to terminate any existing pods...")
+        try:
+            result = self.runpod_terminate_manager.run()
+            if result:
+                self.log.info("Pod termination/stop process completed.")
+            else:
+                self.log.warning("Pod termination/stop process did not complete successfully.")
+        except Exception as e:
+            self.log.error(f"An error occurred during pod termination/stop: {e}", exc_info=self.debug)
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

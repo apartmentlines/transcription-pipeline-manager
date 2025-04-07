@@ -252,6 +252,43 @@ def test_trigger_pipeline_run_api_error(mock_post: MagicMock, manager_instance: 
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
 
+# _terminate_pods
+def test_terminate_pods_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _terminate_pods calls the terminate manager and logs success."""
+    _, mock_terminate_manager = mock_runpod_manager
+    mock_terminate_manager.run.return_value = True
+
+    manager_instance._terminate_pods()
+
+    mock_terminate_manager.run.assert_called_once()
+    mock_logger.info.assert_any_call("Pod termination/stop process completed.")
+
+
+def test_terminate_pods_failure(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _terminate_pods calls the terminate manager and logs failure."""
+    _, mock_terminate_manager = mock_runpod_manager
+    mock_terminate_manager.run.return_value = None
+
+    manager_instance._terminate_pods()
+
+    mock_terminate_manager.run.assert_called_once()
+    mock_logger.warning.assert_any_call("Pod termination/stop process did not complete successfully.")
+
+
+def test_terminate_pods_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
+    """Test _terminate_pods catches exceptions from the terminate manager."""
+    _, mock_terminate_manager = mock_runpod_manager
+    test_exception = Exception("RunPod API error")
+    mock_terminate_manager.run.side_effect = test_exception
+
+    manager_instance._terminate_pods()
+
+    mock_terminate_manager.run.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"An error occurred during pod termination/stop: {test_exception}", exc_info=False
+    )
+
+
 @patch("transcription_pipeline_manager.manager.requests.post")
 def test_trigger_pipeline_run_request_exception(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
     """Test _trigger_pipeline_run returns False on RequestException."""
