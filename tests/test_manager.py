@@ -95,6 +95,7 @@ def manager_instance(mocker: MockerFixture) -> TranscriptionPipelineManager:
         domain=TEST_DOMAIN,
         limit=10,
         processing_limit=2,
+        ngrok=False,
         debug=False,
     )
 
@@ -171,6 +172,7 @@ def test_manager_init_defaults(
     assert manager.domain == TEST_DOMAIN
     assert manager.limit == const.DEFAULT_TRANSCRIPTION_LIMIT
     assert manager.processing_limit == const.DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT
+    assert manager.ngrok is False
     assert manager.debug is False
 
     assert manager.callback_url_subdomain == f"www.{TEST_DOMAIN}"
@@ -240,6 +242,7 @@ def test_manager_init_custom_values(
 
     custom_limit = 50
     custom_processing_limit = 4
+    custom_ngrok = True
     custom_debug = True
 
     manager = TranscriptionPipelineManager(
@@ -247,6 +250,7 @@ def test_manager_init_custom_values(
         domain=TEST_DOMAIN,
         limit=custom_limit,
         processing_limit=custom_processing_limit,
+        ngrok=custom_ngrok,
         debug=custom_debug,
     )
 
@@ -254,6 +258,7 @@ def test_manager_init_custom_values(
     assert manager.domain == TEST_DOMAIN
     assert manager.limit == custom_limit
     assert manager.processing_limit == custom_processing_limit
+    assert manager.ngrok is custom_ngrok
     assert manager.debug is custom_debug
 
     mock_logger_cls.assert_called_once_with("TranscriptionPipelineManager", debug=custom_debug)
@@ -676,7 +681,7 @@ def test_main_success_flow(
 ) -> None:
     """Test the main function executes the success path correctly."""
     mock_args = argparse.Namespace(
-        api_key="cli_key", domain="cli.domain", limit=10, processing_limit=2, debug=False
+        api_key="cli_key", domain="cli.domain", limit=10, processing_limit=2, ngrok=False, debug=False
     )
     mock_parse_args.return_value = mock_args
     mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
@@ -692,6 +697,7 @@ def test_main_success_flow(
         domain=TEST_DOMAIN,
         limit=mock_args.limit,
         processing_limit=mock_args.processing_limit,
+        ngrok=mock_args.ngrok,
         debug=mock_args.debug,
     )
     mock_pipeline_instance.run.assert_called_once()
@@ -743,7 +749,7 @@ def test_main_manager_init_failure(
 ) -> None:
     """Test main function calls fail_hard if manager initialization fails."""
     mock_args = argparse.Namespace(
-        api_key="k", domain="d", limit=1, processing_limit=1, debug=True
+        api_key="k", domain="d", limit=1, processing_limit=1, ngrok=False, debug=True
     )
     mock_parse_args.return_value = mock_args
     mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
@@ -777,7 +783,7 @@ def test_main_manager_run_failure(
 ) -> None:
     """Test main function calls fail_hard if pipeline.run() fails."""
     mock_args = argparse.Namespace(
-        api_key="k", domain="d", limit=1, processing_limit=1, debug=False
+        api_key="k", domain="d", limit=1, processing_limit=1, ngrok=False, debug=False
     )
     mock_parse_args.return_value = mock_args
     mock_load_config.return_value = (TEST_API_KEY, TEST_DOMAIN)
@@ -1504,6 +1510,39 @@ def test_trigger_pipeline_run_request_exception(mock_post: MagicMock, manager_in
         f"Error triggering pipeline run at {TEST_POD_URL}/run: Connection failed", exc_info=False
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
+
+
+# _build_logs_callback_url
+@pytest.mark.parametrize(
+    "ngrok_enabled, expected_url_pattern",
+    [
+        (False, f"https://www.{TEST_DOMAIN}/api/transcription/logs?api_key={TEST_API_KEY}"),
+        (True, f"{const.NGROK_DOMAIN}/logs?api_key={TEST_API_KEY}"),
+    ],
+    ids=["ngrok_disabled", "ngrok_enabled"]
+)
+@patch("transcription_pipeline_manager.manager.Logger")
+@patch("transcription_pipeline_manager.manager.RestInterface")
+@patch("transcription_pipeline_manager.manager.RunpodSingletonManager")
+@patch("transcription_pipeline_manager.manager.Path")
+def test_build_logs_callback_url(
+    mock_path: MagicMock,
+    mock_runpod: MagicMock,
+    mock_rest: MagicMock,
+    mock_logger: MagicMock,
+    ngrok_enabled: bool,
+    expected_url_pattern: str
+) -> None:
+    """Test _build_logs_callback_url constructs the correct URL based on ngrok flag."""
+    # Minimal setup needed just for this method
+    manager = TranscriptionPipelineManager(
+        api_key=TEST_API_KEY,
+        domain=TEST_DOMAIN,
+        ngrok=ngrok_enabled,
+        debug=False,
+    )
+    actual_url = manager._build_logs_callback_url()
+    assert actual_url == expected_url_pattern
 
 
 @patch("transcription_pipeline_manager.manager.requests.post")

@@ -24,6 +24,7 @@ from transcription_pipeline_manager.config import load_configuration, set_enviro
 from transcription_pipeline_manager.constants import (
     DEFAULT_REST_HOST,
     DEFAULT_REST_PORT,
+    NGROK_DOMAIN,
     DEFAULT_TRANSCRIPTION_LIMIT,
     DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
     # Manager specific constants
@@ -61,6 +62,7 @@ class TranscriptionPipelineManager:
         domain: str,
         limit: int = DEFAULT_TRANSCRIPTION_LIMIT,
         processing_limit: int = DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
+        ngrok: bool = False,
         debug: bool = False,
     ) -> None:
         """
@@ -77,6 +79,8 @@ class TranscriptionPipelineManager:
         :type limit: int
         :param processing_limit: The concurrency limit for processing within the pipeline.
         :type processing_limit: int
+        :param ngrok: Flag to enable ngrok tunneling.
+        :type ngrok: bool
         :param debug: Flag to enable debug logging throughout the manager and its components.
         :type debug: bool
         """
@@ -84,6 +88,7 @@ class TranscriptionPipelineManager:
         self.domain: str = domain
         self.limit: int = limit
         self.processing_limit: int = processing_limit
+        self.ngrok: bool = ngrok
         self.debug: bool = debug
 
         self.log: logging.Logger = Logger(self.__class__.__name__, debug=self.debug)
@@ -128,7 +133,10 @@ class TranscriptionPipelineManager:
 
     def _build_logs_callback_url(self) -> str:
         """Constructs the URL for the REST interface's log endpoint."""
-        return f"https://{self.callback_url_subdomain}/api/transcription/logs?api_key={self.api_key}"
+        if self.ngrok:
+            return f"{NGROK_DOMAIN}/logs?api_key={self.api_key}"
+        else:
+            return f"https://{self.callback_url_subdomain}/api/transcription/logs?api_key={self.api_key}"
 
     def get_current_time(self) -> float:
         """Returns the current time in seconds since the Unix epoch."""
@@ -489,6 +497,7 @@ def parse_arguments() -> argparse.Namespace:
         default=DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
         help="Maximum concurrent processing threads, default %(default)s",
     )
+    parser.add_argument("--ngrok", action="store_true", help="Use ngrok to expose the REST interface")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -502,6 +511,7 @@ def main() -> None:
             domain=domain,
             limit=args.limit,
             processing_limit=args.processing_limit,
+            ngrok=args.ngrok,
             debug=args.debug,
         )
         pipeline.run()

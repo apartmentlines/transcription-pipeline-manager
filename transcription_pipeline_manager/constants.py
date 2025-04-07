@@ -1,6 +1,7 @@
 # REST interface constants
 DEFAULT_REST_HOST = "127.0.0.1"
 DEFAULT_REST_PORT = 8080
+NGROK_DOMAIN = "https://completely-quiet-bobcat.ngrok-free.app"
 
 # Exit Codes
 EXIT_SUCCESS = 0
