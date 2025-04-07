@@ -43,6 +43,7 @@ from transcription_pipeline_manager.constants import (
     STATE_ATTEMPTING_PIPELINE_RUN,
     STATE_UPDATING_COUNTS,
     STATE_WAITING_AFTER_FAILURE,
+    VALID_STATES,
 )
 
 
@@ -129,6 +130,14 @@ class TranscriptionPipelineManager:
         """Constructs the URL for the REST interface's log endpoint."""
         return f"https://{self.callback_url_subdomain}/api/transcription/logs?api_key={self.api_key}"
 
+    def get_current_time(self) -> float:
+        """Returns the current time in seconds since the Unix epoch."""
+        return time.time()
+
+    def sleep(self, seconds: float) -> None:
+        """Sleeps for the specified number of seconds."""
+        time.sleep(seconds)
+
     def run(self) -> None:
         """
         The main execution method that starts the manager's control loop.
@@ -149,7 +158,7 @@ class TranscriptionPipelineManager:
 
         try:
             while not self.shutdown_event.is_set():
-                now = time.time()
+                now = self.get_current_time()
                 elapsed_cycle_time = now - cycle_start_time if cycle_start_time > 0 else 0
 
                 # --- Time-Based Cycle Reset ---
@@ -181,12 +190,11 @@ class TranscriptionPipelineManager:
                 if current_state == STATE_WAITING_AFTER_FAILURE:
                     current_state = self._handle_waiting_after_failure(elapsed_cycle_time)
 
-                else:
-                    self.log.error(f"Encountered unknown or invalid state: {current_state}. Resetting cycle.")
-                    current_state = STATE_STARTING_CYCLE
+                if current_state not in VALID_STATES:
+                    raise RuntimeError(f"Encountered unknown or invalid state: {current_state}. Aborting.")
 
                 # --- End of Loop ---
-                time.sleep(MAIN_LOOP_SLEEP)
+                self.sleep(MAIN_LOOP_SLEEP)
 
         except KeyboardInterrupt:
              self.log.info("KeyboardInterrupt received, initiating shutdown.")
