@@ -324,7 +324,7 @@ class TranscriptionPipelineManager:
                 self.log.error(f"Failed to decode JSON response from {status_url}.", exc_info=self.debug)
                 return False
         except requests.exceptions.HTTPError as e:
-            self.log.error(f"Failed to get pod status from {status_url}. Status: {e.response.status_code} {e.response.reason}")
+            self.log.debug(f"Failed to get pod status from {status_url}. Status: {e.response.status_code} {e.response.reason}")
             return False
         except RequestException as e:
             self.log.error(f"Error requesting pod status from {status_url}: {e}", exc_info=self.debug)

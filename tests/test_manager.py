@@ -325,8 +325,8 @@ def test_check_pod_idle_status_not_idle(mock_get: MagicMock, manager_instance: T
 def test_check_pod_idle_status_http_error(mock_get: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _check_pod_idle_status returns False on non-200 status code."""
     mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 500
-    mock_response.reason = "Internal Server Error"
+    mock_response.status_code = 404
+    mock_response.reason = "Not Found"
     mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
     mock_get.return_value = mock_response
 
@@ -337,9 +337,8 @@ def test_check_pod_idle_status_http_error(mock_get: MagicMock, manager_instance:
         f"{TEST_POD_URL}/status",
         timeout=const.POD_REQUEST_TIMEOUT
     )
-    mock_logger.error.assert_called_once_with(
-        f"Failed to get pod status from {TEST_POD_URL}/status. Status: 500 Internal Server Error"
-    )
+    expected_msg = f"Failed to get pod status from {TEST_POD_URL}/status. Status: 404 Not Found"
+    assert mock_logger.debug.call_args_list.count(call(expected_msg)) == 1
 
 
 @patch("transcription_pipeline_manager.manager.requests.get")
