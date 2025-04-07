@@ -495,7 +495,6 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_arguments()
-
     try:
         api_key, domain = load_configuration(args)
         pipeline = TranscriptionPipelineManager(
