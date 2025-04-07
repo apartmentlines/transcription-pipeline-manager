@@ -254,6 +254,39 @@ def test_trigger_pipeline_run_api_error(mock_post: MagicMock, manager_instance: 
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
 
+# _shutdown
+def test_shutdown_calls_rest_interface_shutdown(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _shutdown calls shutdown on the RestInterface instance."""
+    manager_instance._shutdown()
+
+    mock_rest_interface.shutdown.assert_called_once()
+    mock_logger.info.assert_any_call("REST interface shutdown complete.")
+
+
+def test_shutdown_handles_no_rest_interface(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
+    """Test _shutdown handles the case where RestInterface was not initialized."""
+    manager_instance.rest_interface = None
+
+    manager_instance._shutdown()
+
+    # No specific assertion for shutdown not being called, as it shouldn't exist
+    mock_logger.info.assert_any_call("REST interface shutdown complete.") # Still logs completion
+
+
+def test_shutdown_handles_rest_interface_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _shutdown logs an error if RestInterface.shutdown() raises an exception."""
+    test_exception = Exception("Flask server error on shutdown")
+    mock_rest_interface.shutdown.side_effect = test_exception
+
+    manager_instance._shutdown()
+
+    mock_rest_interface.shutdown.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Error shutting down REST interface: {test_exception}", exc_info=False
+    )
+    # Should still log completion message even if shutdown had an error
+    mock_logger.info.assert_any_call("REST interface shutdown complete.")
+
 # _terminate_pods
 def test_terminate_pods_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
     """Test _terminate_pods calls the terminate manager and logs success."""

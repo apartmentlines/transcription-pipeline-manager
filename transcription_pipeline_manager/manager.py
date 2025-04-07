@@ -226,6 +226,20 @@ class TranscriptionPipelineManager:
         self.log.info(f"Received signal {signal_name}. Initiating graceful shutdown...")
         self.shutdown_event.set()
 
+    def _shutdown(self) -> None:
+        """
+        Performs graceful shutdown of manager components, primarily the RestInterface.
+        """
+        self.log.info("Shutting down REST interface...")
+        if self.rest_interface:
+            try:
+                self.rest_interface.shutdown()
+            except Exception as e:
+                self.log.error(f"Error shutting down REST interface: {e}", exc_info=self.debug)
+        else:
+            self.log.debug("REST interface was not initialized, nothing to shut down.")
+        self.log.info("REST interface shutdown complete.")
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
