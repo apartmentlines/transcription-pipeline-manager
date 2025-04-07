@@ -667,7 +667,59 @@ def test_run_initialization_and_immediate_shutdown(
     mock_shutdown.assert_called_once()
 
 
-# Phase 4: Entry Point (main)
+# Phase 4: Argument Parsing (parse_arguments)
+
+def test_parse_arguments_defaults(mocker: MockerFixture) -> None:
+    """Test parse_arguments with default values."""
+    mocker.patch("sys.argv", ["script_name"]) # Simulate no command-line args
+    args = manager_module.parse_arguments()
+    assert args.api_key is None
+    assert args.domain is None
+    assert args.limit == const.DEFAULT_TRANSCRIPTION_LIMIT
+    assert args.processing_limit == const.DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT
+    assert args.ngrok is False
+    assert args.debug is False
+
+def test_parse_arguments_custom_values(mocker: MockerFixture) -> None:
+    """Test parse_arguments with custom values provided."""
+    test_key = "custom_key"
+    test_domain = "custom.domain"
+    test_limit = 500
+    test_processing_limit = 5
+    mocker.patch("sys.argv", [
+        "script_name",
+        "--api-key", test_key,
+        "--domain", test_domain,
+        "--limit", str(test_limit),
+        "--processing-limit", str(test_processing_limit),
+        "--ngrok",
+        "--debug",
+    ])
+    args = manager_module.parse_arguments()
+    assert args.api_key == test_key
+    assert args.domain == test_domain
+    assert args.limit == test_limit
+    assert args.processing_limit == test_processing_limit
+    assert args.ngrok is True
+    assert args.debug is True
+
+@pytest.mark.parametrize("arg_name", ["--limit", "--processing-limit"])
+def test_parse_arguments_invalid_positive_int(mocker: MockerFixture, arg_name: str) -> None:
+    """Test parse_arguments raises error for non-positive integer values."""
+    mocker.patch("sys.argv", ["script_name", arg_name, "0"])
+    with pytest.raises(SystemExit):
+        manager_module.parse_arguments()
+
+    mocker.patch("sys.argv", ["script_name", arg_name, "-10"])
+    with pytest.raises(SystemExit):
+        manager_module.parse_arguments()
+
+    mocker.patch("sys.argv", ["script_name", arg_name, "not_an_int"])
+    with pytest.raises(SystemExit):
+        manager_module.parse_arguments()
+
+
+# Phase 5: Entry Point (main)
 
 @patch("transcription_pipeline_manager.manager.parse_arguments")
 @patch("transcription_pipeline_manager.manager.load_configuration")
