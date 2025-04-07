@@ -184,6 +184,25 @@ class TranscriptionPipelineManager:
         except Exception as e:
             self.log.error(f"An error occurred during pod termination/stop: {e}", exc_info=self.debug)
 
+    def _update_pod_counts(self) -> None:
+        """
+        Retrieves the current total and running pod counts using the
+        RunpodSingletonManager and updates the RestInterface statistics.
+        """
+        self.log.debug("Attempting to update pod counts...")
+        try:
+            counts = self.runpod_start_manager.count_pods()
+            if isinstance(counts, dict) and 'total' in counts and 'running' in counts:
+                total = counts['total']
+                running = counts['running']
+                self.rest_interface.update_pods_total(total)
+                self.rest_interface.update_pods_running(running)
+                self.log.info(f"Successfully updated pod counts: Total={total}, Running={running}")
+            else:
+                 self.log.warning("Did not receive valid pod counts from RunpodSingletonManager.")
+        except Exception as e:
+            self.log.error(f"Failed to retrieve pod counts: {e}", exc_info=self.debug)
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

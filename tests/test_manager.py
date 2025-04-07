@@ -5,6 +5,7 @@ import json
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
+from typing import Any
 
 import pytest
 from pytest_mock import MockerFixture
@@ -287,6 +288,55 @@ def test_terminate_pods_exception(manager_instance: TranscriptionPipelineManager
     mock_logger.error.assert_called_once_with(
         f"An error occurred during pod termination/stop: {test_exception}", exc_info=False
     )
+
+
+# _update_pod_counts
+def test_update_pod_counts_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock], mock_rest_interface: MagicMock) -> None:
+    """Test _update_pod_counts successfully gets counts and updates REST interface."""
+    mock_start_manager, _ = mock_runpod_manager
+    counts = {'total': 5, 'running': 3}
+    mock_start_manager.count_pods.return_value = counts
+
+    manager_instance._update_pod_counts()
+
+    mock_start_manager.count_pods.assert_called_once()
+    mock_rest_interface.update_pods_total.assert_called_once_with(5)
+    mock_rest_interface.update_pods_running.assert_called_once_with(3)
+
+
+def test_update_pod_counts_exception(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock], mock_rest_interface: MagicMock) -> None:
+    """Test _update_pod_counts handles exceptions from count_pods."""
+    mock_start_manager, _ = mock_runpod_manager
+    test_exception = Exception("RunPod API error during count")
+    mock_start_manager.count_pods.side_effect = test_exception
+
+    manager_instance._update_pod_counts()
+
+    mock_start_manager.count_pods.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Failed to retrieve pod counts: {test_exception}", exc_info=False
+    )
+    mock_rest_interface.update_pods_total.assert_not_called()
+    mock_rest_interface.update_pods_running.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid_counts", [
+    {'total': 5}, # Missing 'running'
+    {'running': 3}, # Missing 'total'
+    {}, # Empty dict
+    "not a dict", # Wrong type
+])
+def test_update_pod_counts_invalid_dict(invalid_counts: Any, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock], mock_rest_interface: MagicMock) -> None:
+    """Test _update_pod_counts handles invalid dictionary format from count_pods."""
+    mock_start_manager, _ = mock_runpod_manager
+    mock_start_manager.count_pods.return_value = invalid_counts
+
+    manager_instance._update_pod_counts()
+
+    mock_start_manager.count_pods.assert_called_once()
+    mock_logger.warning.assert_called_once_with("Did not receive valid pod counts from RunpodSingletonManager.")
+    mock_rest_interface.update_pods_total.assert_not_called()
+    mock_rest_interface.update_pods_running.assert_not_called()
 
 
 @patch("transcription_pipeline_manager.manager.requests.post")
