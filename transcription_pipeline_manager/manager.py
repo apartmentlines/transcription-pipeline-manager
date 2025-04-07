@@ -35,6 +35,14 @@ from transcription_pipeline_manager.constants import (
     POD_REQUEST_TIMEOUT,
     RUNPOD_CONFIG_FILENAME,
     RUNPOD_CONFIG_DIR,
+    POD_URL_TEMPLATE,
+    # State constants
+    STATE_STARTING_CYCLE,
+    STATE_ATTEMPTING_POD_START,
+    STATE_WAITING_FOR_IDLE,
+    STATE_ATTEMPTING_PIPELINE_RUN,
+    STATE_UPDATING_COUNTS,
+    STATE_WAITING_AFTER_FAILURE,
 )
 
 
@@ -114,6 +122,7 @@ class TranscriptionPipelineManager:
         self.log.debug("RunPod Terminate Manager initialized.")
 
         self.shutdown_event: threading.Event = threading.Event()
+        self.current_state: str = ""
         self.log.debug("Shutdown event initialized.")
         self.log.info("Transcription Pipeline Manager initialization complete.")
 
@@ -129,9 +138,151 @@ class TranscriptionPipelineManager:
         state machine loop until a shutdown signal is received.
         """
         self.log.info("Starting transcription pipeline manager run loop...")
-        # TODO: Implement the main loop in run()
+        self._setup_signal_handlers()
+        self.rest_interface.start()
 
-    # --- Helper Methods ---
+        self.current_state = STATE_STARTING_CYCLE
+        cycle_start_time: float = 0.0
+        pod_id: str = ""
+        pod_url: str = ""
+        last_count_update_time: float = 0.0
+        last_idle_check_time: float = 0.0
+
+        try:
+            while not self.shutdown_event.is_set():
+                now = time.time()
+                elapsed_cycle_time = now - cycle_start_time if cycle_start_time > 0 else 0
+
+                # --- Time-Based Cycle Reset ---
+                if self.current_state != STATE_STARTING_CYCLE and elapsed_cycle_time >= CYCLE_DURATION:
+                    self.log.info(f"Hourly cycle duration ({CYCLE_DURATION}s) reached. Resetting cycle.")
+                    self.current_state = STATE_STARTING_CYCLE
+                    # Pod termination is handled by pod itself or next start cycle
+
+                # --- State Dispatch ---
+                if self.current_state == STATE_STARTING_CYCLE:
+                    self.current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time = self._handle_starting_cycle(now)
+
+                if self.current_state == STATE_ATTEMPTING_POD_START:
+                    self.current_state, pod_id, pod_url = self._handle_attempting_pod_start()
+
+                if self.current_state == STATE_WAITING_FOR_IDLE:
+                    self.current_state, last_idle_check_time = self._handle_waiting_for_idle(
+                        now, elapsed_cycle_time, last_idle_check_time, pod_id, pod_url
+                    )
+
+                if self.current_state == STATE_ATTEMPTING_PIPELINE_RUN:
+                    self.current_state = self._handle_attempting_pipeline_run(pod_id, pod_url)
+
+                if self.current_state == STATE_UPDATING_COUNTS:
+                    self.current_state, last_count_update_time = self._handle_updating_counts(
+                        now, last_count_update_time
+                    )
+
+                if self.current_state == STATE_WAITING_AFTER_FAILURE:
+                    self.current_state = self._handle_waiting_after_failure(elapsed_cycle_time)
+
+                else:
+                    self.log.error(f"Encountered unknown state: {self.current_state}. Resetting cycle.")
+                    self.current_state = STATE_STARTING_CYCLE
+
+                # --- End of Loop ---
+                time.sleep(MAIN_LOOP_SLEEP)
+
+        except KeyboardInterrupt:
+             self.log.info("KeyboardInterrupt received, initiating shutdown.")
+             self.shutdown_event.set()
+        except Exception as e:
+             self.log.critical(f"Unhandled exception in main loop: {e}", exc_info=self.debug)
+             self.shutdown_event.set()
+        finally:
+            self.log.info("Run loop finished or interrupted.")
+            self._shutdown()
+            self.log.info("Transcription pipeline manager shut down gracefully.")
+
+    # --- State Handler Methods ---
+
+    def _handle_starting_cycle(self, now: float) -> tuple[str, float, str, str, float, float]:
+        """Handles logic for the STARTING_CYCLE state."""
+        self.log.info("Starting new hourly cycle.")
+        next_state = STATE_ATTEMPTING_POD_START
+        cycle_start_time = now
+        pod_id = ""
+        pod_url = ""
+        last_count_update_time = 0.0
+        last_idle_check_time = 0.0
+        return next_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time
+
+    def _handle_attempting_pod_start(self) -> tuple[str, str, str]:
+        """Handles logic for the ATTEMPTING_POD_START state."""
+        self.log.info("Attempting to ensure RunPod pod is running...")
+        next_state = STATE_WAITING_AFTER_FAILURE
+        pod_id = ""
+        pod_url = ""
+        try:
+            pod_info = self.runpod_start_manager.run()
+            if pod_info and isinstance(pod_info, dict) and 'id' in pod_info:
+                pod_id = pod_info['id']
+                pod_url = POD_URL_TEMPLATE % pod_id
+                self.log.info(f"Pod {pod_id} confirmed running/started. URL: {pod_url}")
+                next_state = STATE_WAITING_FOR_IDLE
+            else:
+                self.log.warning("Failed to start or confirm pod is running.")
+                self._terminate_pods()
+        except Exception as e:
+            self.log.error(f"Error during pod start attempt: {e}", exc_info=self.debug)
+            self._terminate_pods()
+        return next_state, pod_id, pod_url
+
+    def _handle_waiting_for_idle(self, now: float, elapsed_cycle_time: float, last_idle_check_time: float, pod_id: str, pod_url: str) -> tuple[str, float]:
+        """Handles logic for the WAITING_FOR_IDLE state."""
+        next_state = STATE_WAITING_FOR_IDLE
+        updated_last_idle_check_time = last_idle_check_time
+        if elapsed_cycle_time >= STATUS_CHECK_TIMEOUT:
+            self.log.warning(f"Timeout ({STATUS_CHECK_TIMEOUT}s) waiting for pod {pod_id} to become idle. Terminating.")
+            self._terminate_pods()
+            next_state = STATE_WAITING_AFTER_FAILURE
+        elif now - last_idle_check_time >= POD_STATUS_CHECK_INTERVAL:
+            self.log.debug(f"Checking if pod {pod_id} is idle at {pod_url}...")
+            updated_last_idle_check_time = now
+            is_idle = self._check_pod_idle_status(pod_url)
+            if is_idle:
+                self.log.info(f"Pod {pod_id} at {pod_url} is now ready.")
+                next_state = STATE_ATTEMPTING_PIPELINE_RUN
+            else:
+                self.log.debug(f"Pod {pod_id} not ready yet. Waiting...")
+        return next_state, updated_last_idle_check_time
+
+    def _handle_attempting_pipeline_run(self, pod_id: str, pod_url: str) -> str:
+        """Handles logic for the ATTEMPTING_PIPELINE_RUN state."""
+        self.log.info(f"Attempting to trigger pipeline run on pod {pod_id}...")
+        run_triggered = self._trigger_pipeline_run(pod_url)
+        if run_triggered:
+            self.log.info(f"Pipeline run successfully triggered on pod {pod_id}.")
+            return STATE_UPDATING_COUNTS
+        else:
+            self.log.error(f"Failed to trigger pipeline run on pod {pod_id}. Terminating.")
+            self._terminate_pods()
+            return STATE_WAITING_AFTER_FAILURE
+
+    def _handle_updating_counts(self, now: float, last_count_update_time: float) -> tuple[str, float]:
+        """Handles logic for the UPDATING_COUNTS state."""
+        next_state = STATE_UPDATING_COUNTS
+        updated_last_count_update_time = last_count_update_time
+        if now - last_count_update_time >= COUNT_UPDATE_INTERVAL:
+            self.log.debug("Updating pod counts...")
+            counts_updated = self._update_pod_counts()
+            if counts_updated:
+                updated_last_count_update_time = now
+        return next_state, updated_last_count_update_time
+
+    def _handle_waiting_after_failure(self, elapsed_cycle_time: float) -> str:
+        """Handles logic for the WAITING_AFTER_FAILURE state."""
+        remaining_time = max(0, CYCLE_DURATION - elapsed_cycle_time)
+        self.log.debug(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+        return STATE_WAITING_AFTER_FAILURE
+
+    # --- Core Helper Methods ---
 
     def _check_pod_idle_status(self, pod_url: str) -> bool:
         """
@@ -240,10 +391,13 @@ class TranscriptionPipelineManager:
         except Exception as e:
             self.log.error(f"An error occurred during pod termination/stop: {e}", exc_info=self.debug)
 
-    def _update_pod_counts(self) -> None:
+    def _update_pod_counts(self) -> bool:
         """
         Retrieves the current total and running pod counts using the
         RunpodSingletonManager and updates the RestInterface statistics.
+
+        :return: True if pod counts were successfully updated, False otherwise.
+        :rtype: bool
         """
         self.log.debug("Attempting to update pod counts...")
         try:
@@ -254,10 +408,12 @@ class TranscriptionPipelineManager:
                 self.rest_interface.update_pods_total(total)
                 self.rest_interface.update_pods_running(running)
                 self.log.info(f"Successfully updated pod counts: Total={total}, Running={running}")
+                return True
             else:
                  self.log.warning("Did not receive valid pod counts from RunpodSingletonManager.")
         except Exception as e:
             self.log.error(f"Failed to retrieve pod counts: {e}", exc_info=self.debug)
+        return False
 
     def _setup_signal_handlers(self) -> None:
         """

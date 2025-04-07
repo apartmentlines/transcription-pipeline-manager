@@ -19,3 +19,12 @@ POD_STATUS_CHECK_INTERVAL = 5 # seconds (how often to check /status when waiting
 POD_REQUEST_TIMEOUT = 15 # seconds (default timeout for HTTP requests to the pod)
 RUNPOD_CONFIG_FILENAME = "transcription-pipeline.config.yaml"
 RUNPOD_CONFIG_DIR = "runpod-singleton"
+POD_URL_TEMPLATE = "https://%s-8080.proxy.runpod.net"
+
+# State constants for the manager main loop
+STATE_STARTING_CYCLE = "STARTING_CYCLE"
+STATE_ATTEMPTING_POD_START = "ATTEMPTING_POD_START"
+STATE_WAITING_FOR_IDLE = "WAITING_FOR_IDLE"
+STATE_ATTEMPTING_PIPELINE_RUN = "ATTEMPTING_PIPELINE_RUN"
+STATE_UPDATING_COUNTS = "UPDATING_COUNTS"
+STATE_WAITING_AFTER_FAILURE = "WAITING_AFTER_FAILURE"
