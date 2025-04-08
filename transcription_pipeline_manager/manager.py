@@ -334,27 +334,38 @@ class TranscriptionPipelineManager:
         """
         Processes the response from a pipeline run trigger request.
 
+        Expects a JSON response like: {"success": bool, "message": str}
+
         :param run_url: The URL of the run endpoint
         :type run_url: str
         :param response: The response object from the request
         :type response: requests.Response
-        :return: True if the pipeline run was successfully triggered, False otherwise.
+        :return: True if the pipeline run was successfully triggered (success=True), False otherwise.
         :rtype: bool
         """
         try:
             response_data = response.json()
         except Exception as e:
-            self.log.error(f"Failed to decode JSON response from {run_url}: {e}.", exc_info=self.debug)
+            self.log.error(f"Failed to decode JSON response from {run_url}: {e}", exc_info=self.debug)
             return False
-        if "message" in response_data:
-            self.log.info(f"Pipeline run triggered successfully: {response_data['message']}")
-            self.rest_interface.update_pipeline_last_run_time(int(time.time())) # Update REST interface stats on successful trigger
+
+        if not isinstance(response_data, dict) or "success" not in response_data:
+            self.log.error(f"Unexpected JSON response format from {run_url} (missing 'success' key): {response_data}")
+            return False
+
+        success_flag = response_data["success"]
+        message = response_data.get("message", "No message provided.")
+
+        if not isinstance(success_flag, bool):
+            self.log.error(f"Invalid type for 'success' key in response from {run_url} (expected bool, got {type(success_flag).__name__}): {response_data}")
+            return False
+
+        if success_flag:
+            self.log.info(f"Pipeline run triggered successfully at {run_url}: {message}")
+            self.rest_interface.update_pipeline_last_run_time(int(time.time()))
             return True
-        elif "error" in response_data:
-            self.log.error(f"Pipeline run trigger failed at {run_url}: {response_data['error']}")
-            return False
         else:
-            self.log.error(f"Unexpected JSON response format from {run_url}: {response_data}")
+            self.log.error(f"Pipeline run trigger failed at {run_url}: {message}")
             return False
 
     def _trigger_pipeline_run(self, pod_url: str) -> bool:

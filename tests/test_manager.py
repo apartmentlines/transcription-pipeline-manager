@@ -385,7 +385,7 @@ def test_trigger_pipeline_run_success(mock_time: MagicMock, mock_post: MagicMock
     """Test _trigger_pipeline_run returns True on successful API call."""
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"message": "Pipeline run triggered successfully"}
+    mock_response.json.return_value = {"success": True, "message": "Pipeline run triggered successfully"}
     mock_post.return_value = mock_response
 
     expected_payload = {
@@ -405,14 +405,15 @@ def test_trigger_pipeline_run_success(mock_time: MagicMock, mock_post: MagicMock
         timeout=const.POD_REQUEST_TIMEOUT
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_called_once_with(1234567890)
+    mock_logger.info.assert_called_with(f"Pipeline run triggered successfully at {TEST_POD_URL}/run: Pipeline run triggered successfully")
 
 
 @patch("transcription_pipeline_manager.manager.requests.post")
-def test_trigger_pipeline_run_api_error(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False when API returns an error message."""
+def test_trigger_pipeline_run_failure_response(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run returns False when API response indicates failure."""
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"error": "Invalid parameters"}
+    mock_response.json.return_value = {"success": False, "message": "Invalid parameters"}
     mock_post.return_value = mock_response
 
     result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
@@ -421,6 +422,82 @@ def test_trigger_pipeline_run_api_error(mock_post: MagicMock, manager_instance: 
     mock_post.assert_called_once()
     mock_logger.error.assert_called_once_with(
         f"Pipeline run trigger failed at {TEST_POD_URL}/run: Invalid parameters"
+    )
+    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
+
+
+@patch("transcription_pipeline_manager.manager.requests.post")
+def test_trigger_pipeline_run_http_error(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run returns False on non-200 status code."""
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = 503
+    mock_response.reason = "Service Unavailable"
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
+    mock_post.return_value = mock_response
+
+    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
+
+    assert result is False
+    mock_post.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Failed to trigger pipeline run at {TEST_POD_URL}/run. Status: 503 Service Unavailable"
+    )
+    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
+
+
+@patch("transcription_pipeline_manager.manager.requests.post")
+def test_trigger_pipeline_run_json_decode_error(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run returns False on JSONDecodeError."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    json_exception = json.JSONDecodeError("Expecting value", "doc", 0)
+    mock_response.json.side_effect = json_exception
+    mock_post.return_value = mock_response
+
+    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
+
+    assert result is False
+    mock_post.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Failed to decode JSON response from {TEST_POD_URL}/run: {json_exception}", exc_info=False
+    )
+    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
+
+
+@patch("transcription_pipeline_manager.manager.requests.post")
+def test_trigger_pipeline_run_unexpected_json(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run returns False on unexpected JSON structure (missing 'success')."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    json_return_value = {"message": "Something happened, but no success key"}
+    mock_response.json.return_value = json_return_value
+    mock_post.return_value = mock_response
+
+    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
+
+    assert result is False
+    mock_post.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Unexpected JSON response format from {TEST_POD_URL}/run (missing 'success' key): {json_return_value}"
+    )
+    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
+
+
+@patch("transcription_pipeline_manager.manager.requests.post")
+def test_trigger_pipeline_run_invalid_success_type(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run returns False when 'success' key is not a boolean."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    json_return_value = {"success": "not_a_boolean", "message": "Invalid success type"}
+    mock_response.json.return_value = json_return_value
+    mock_post.return_value = mock_response
+
+    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
+
+    assert result is False
+    mock_post.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"Invalid type for 'success' key in response from {TEST_POD_URL}/run (expected bool, got str): {json_return_value}"
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
@@ -1590,60 +1667,3 @@ def test_build_logs_callback_url(
     )
     actual_url = manager._build_logs_callback_url()
     assert actual_url == expected_url_pattern
-
-
-@patch("transcription_pipeline_manager.manager.requests.post")
-def test_trigger_pipeline_run_http_error(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False on non-200 status code."""
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 503
-    mock_response.reason = "Service Unavailable"
-    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
-    mock_post.return_value = mock_response
-
-    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
-
-    assert result is False
-    mock_post.assert_called_once()
-    mock_logger.error.assert_called_once_with(
-        f"Failed to trigger pipeline run at {TEST_POD_URL}/run. Status: 503 Service Unavailable"
-    )
-    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
-
-
-@patch("transcription_pipeline_manager.manager.requests.post")
-def test_trigger_pipeline_run_json_decode_error(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False on JSONDecodeError."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    json_exception = json.JSONDecodeError("Expecting value", "doc", 0)
-    mock_response.json.side_effect = json_exception
-    mock_post.return_value = mock_response
-
-    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
-
-    assert result is False
-    mock_post.assert_called_once()
-    mock_logger.error.assert_called_once_with(
-        f"Failed to decode JSON response from {TEST_POD_URL}/run: {json_exception}.", exc_info=False
-    )
-    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
-
-
-@patch("transcription_pipeline_manager.manager.requests.post")
-def test_trigger_pipeline_run_unexpected_json(mock_post: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False on unexpected JSON structure."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    json_return_value = {"bad": "values"}
-    mock_response.json.return_value = json_return_value
-    mock_post.return_value = mock_response
-
-    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
-
-    assert result is False
-    mock_post.assert_called_once()
-    mock_logger.error.assert_called_once_with(
-        f"Unexpected JSON response format from {TEST_POD_URL}/run: {json_return_value}"
-    )
-    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
