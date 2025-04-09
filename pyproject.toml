@@ -23,6 +23,7 @@ dependencies = [
     "requests",
     # "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@v0.1.1",
     "runpod-singleton @ git+https://github.com/apartmentlines/runpod-singleton.git@49f98212f1cd5af9b84bc08f6e3107901b0871e0",
+    "tenacity",
 ]
 
 [project.scripts]
