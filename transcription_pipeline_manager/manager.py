@@ -18,6 +18,7 @@ from transcription_pipeline_manager.rest_interface import RestInterface
 from transcription_pipeline_manager.utils import (
     fail_hard,
     positive_int,
+    post_request,
 )
 from transcription_pipeline_manager.logger import Logger
 from transcription_pipeline_manager.config import load_configuration, set_environment_variables
@@ -388,8 +389,7 @@ class TranscriptionPipelineManager:
         self.log.info(f"Triggering pipeline run at {run_url}")
         self.log.debug(f"Payload: {payload}")
         try:
-            response = requests.post(run_url, json=payload, timeout=POD_REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response = post_request(run_url, payload, True)
             return self._process_trigger_pipeline_run_response(run_url, response)
         except requests.exceptions.HTTPError as e:
             self.log.error(f"Failed to trigger pipeline run at {run_url}. Status: {e.response.status_code} {e.response.reason}")
