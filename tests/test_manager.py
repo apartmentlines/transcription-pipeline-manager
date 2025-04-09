@@ -507,7 +507,9 @@ def test_trigger_pipeline_run_invalid_success_type(mock_post_request: MagicMock,
 def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_starting_cycle returns correct initial state values."""
     now = time.time()
-    next_state, cycle_start_time, pod_id, pod_url, last_count, last_idle = manager_instance._handle_starting_cycle(now)
+    result = manager_instance._handle_starting_cycle(now)
+    assert len(result) == 7
+    next_state, cycle_start_time, pod_id, pod_url, last_count, last_idle, wait_start = result
 
     assert next_state == const.STATE_ATTEMPTING_POD_START
     assert cycle_start_time == now
@@ -515,6 +517,7 @@ def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, m
     assert pod_url == ""
     assert last_count == 0.0
     assert last_idle == 0.0
+    assert wait_start == 0.0
     mock_logger.debug.assert_called_with("Starting new hourly cycle.")
 
 
@@ -568,29 +571,32 @@ def test_handle_attempting_pod_start_failure_exception(manager_instance: Transcr
 def test_handle_waiting_for_idle_timeout(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_waiting_for_idle timeout condition."""
     now = time.time()
-    elapsed_cycle_time = const.STATUS_CHECK_TIMEOUT + 1
-    last_idle_check_time = now - 10 # Arbitrary time before now
+    wait_for_idle_start_time = now - const.STATUS_CHECK_TIMEOUT - 1
+    last_idle_check_time = now - 10
 
     with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
         next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
-            now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+            now, wait_for_idle_start_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
         )
 
     assert next_state == const.STATE_WAITING_AFTER_FAILURE
     assert updated_last_idle == last_idle_check_time # Time should not update on timeout
     mock_terminate.assert_called_once()
+    expected_elapsed = now - wait_for_idle_start_time
+    expected_log_msg = f"Timeout ({const.STATUS_CHECK_TIMEOUT}s, waited {expected_elapsed:.1f}s) waiting for pod {TEST_POD_ID} to become idle. Terminating."
+    mock_logger.warning.assert_called_once_with(expected_log_msg)
 
 
 def test_handle_waiting_for_idle_interval_not_reached(manager_instance: TranscriptionPipelineManager) -> None:
     """Test _handle_waiting_for_idle when check interval is not reached."""
     now = time.time()
-    elapsed_cycle_time = 100
+    wait_for_idle_start_time = now - 100
     last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL / 2) # Interval not reached
 
     with patch.object(manager_instance, '_check_pod_idle_status') as mock_check_idle:
         with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
             next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
-                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+                now, wait_for_idle_start_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
             )
 
     assert next_state == const.STATE_WAITING_FOR_IDLE
@@ -602,13 +608,13 @@ def test_handle_waiting_for_idle_interval_not_reached(manager_instance: Transcri
 def test_handle_waiting_for_idle_check_not_idle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_waiting_for_idle when pod check returns not idle."""
     now = time.time()
-    elapsed_cycle_time = 100
+    wait_for_idle_start_time = now - 100
     last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL * 2) # Interval reached
 
     with patch.object(manager_instance, '_check_pod_idle_status', return_value=False) as mock_check_idle:
         with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
             next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
-                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+                now, wait_for_idle_start_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
             )
 
     assert next_state == const.STATE_WAITING_FOR_IDLE
@@ -620,13 +626,13 @@ def test_handle_waiting_for_idle_check_not_idle(manager_instance: TranscriptionP
 def test_handle_waiting_for_idle_check_is_idle(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_waiting_for_idle when pod check returns idle."""
     now = time.time()
-    elapsed_cycle_time = 100
+    wait_for_idle_start_time = now - 100
     last_idle_check_time = now - (const.POD_STATUS_CHECK_INTERVAL * 2) # Interval reached
 
     with patch.object(manager_instance, '_check_pod_idle_status', return_value=True) as mock_check_idle:
         with patch.object(manager_instance, '_terminate_pods') as mock_terminate:
             next_state, updated_last_idle = manager_instance._handle_waiting_for_idle(
-                now, elapsed_cycle_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
+                now, wait_for_idle_start_time, last_idle_check_time, TEST_POD_ID, TEST_POD_URL
             )
 
     assert next_state == const.STATE_ATTEMPTING_PIPELINE_RUN
@@ -962,7 +968,7 @@ def test_run_navigates_full_success_cycle(
     start_time = 1000.0
 
     # --- Mock State Transitions ---
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
     # Simulate one check returning not idle, then idle
     mock_handle_wait_idle.side_effect = [
@@ -1031,7 +1037,7 @@ def test_run_triggers_hourly_reset(
     # Configure start cycle to be callable multiple times
     def start_cycle_side_effect(now):
         # The 'now' passed here is the mocked time for the current loop iteration
-        return (const.STATE_ATTEMPTING_POD_START, now, "", "", 0.0, 0.0)
+        return (const.STATE_ATTEMPTING_POD_START, now, "", "", 0.0, 0.0, 0.0)
     mock_handle_start_cycle.side_effect = start_cycle_side_effect
 
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
@@ -1093,7 +1099,7 @@ def test_run_shuts_down_cleanly_on_event(
 
     # --- Mock State Transitions ---
     start_time = 1000.0
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
     mock_handle_wait_idle.return_value = (const.STATE_WAITING_FOR_IDLE, start_time + 1.0)
     # --- End Mock ---
@@ -1153,7 +1159,7 @@ def test_run_handles_idle_timeout(
     ]
 
     # --- Mock State Transitions ---
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
     # Mock the check called by the real _handle_waiting_for_idle to always return False (not idle)
     mock_check_pod_idle.return_value = False
@@ -1206,7 +1212,7 @@ def test_run_handles_pod_start_failure(
 
     # --- Mock State Transitions ---
     start_time = 1000.0
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     # Simulate failure in pod start handler
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_AFTER_FAILURE, "", "")
     # Stay in failure state
@@ -1259,7 +1265,7 @@ def test_run_handles_pipeline_trigger_failure(
 
     # --- Mock State Transitions ---
     start_time = 1000.0
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
     mock_handle_wait_idle.return_value = (const.STATE_ATTEMPTING_PIPELINE_RUN, start_time + 1)
     # Simulate failure in the trigger function called by the real handler
@@ -1335,7 +1341,7 @@ def test_run_handles_count_update_interval(
     ]
 
     # --- Mock State Transitions ---
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url")
     mock_handle_wait_idle.return_value = (const.STATE_ATTEMPTING_PIPELINE_RUN, start_time + 1)
     mock_handle_attempt_run.return_value = const.STATE_UPDATING_COUNTS # Enters UPDATE state in loop 5
@@ -1411,7 +1417,7 @@ def test_run_handles_idle_check_interval(
     ]
 
     # --- Mock State Transitions ---
-    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (const.STATE_ATTEMPTING_POD_START, start_time, "", "", 0.0, 0.0, 0.0)
     mock_handle_attempt_start.return_value = (const.STATE_WAITING_FOR_IDLE, "pod", "url") # Enters WAIT state in loop 3
 
     # Mock _handle_waiting_for_idle with a side_effect to control interval logic
@@ -1462,7 +1468,7 @@ def test_run_raises_runtimeerror_on_invalid_state(
     invalid_state = "INVALID_STATE_XYZ"
 
     # --- Mock State Transitions ---
-    mock_handle_start_cycle.return_value = (invalid_state, start_time, "", "", 0.0, 0.0)
+    mock_handle_start_cycle.return_value = (invalid_state, start_time, "", "", 0.0, 0.0, 0.0)
     # --- End Mock ---
 
     # Mock time for the first loop iteration

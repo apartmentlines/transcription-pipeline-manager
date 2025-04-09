@@ -161,6 +161,7 @@ class TranscriptionPipelineManager:
         pod_id: str = ""
         pod_url: str = ""
         last_count_update_time: float = 0.0
+        wait_for_idle_start_time: float = 0.0
         last_idle_check_time: float = 0.0
 
         try:
@@ -176,14 +177,18 @@ class TranscriptionPipelineManager:
 
                 # --- State Dispatch ---
                 if current_state == STATE_STARTING_CYCLE:
-                    current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time = self._handle_starting_cycle(now)
+                    current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time, wait_for_idle_start_time = self._handle_starting_cycle(now)
 
                 if current_state == STATE_ATTEMPTING_POD_START:
                     current_state, pod_id, pod_url = self._handle_attempting_pod_start()
 
                 if current_state == STATE_WAITING_FOR_IDLE:
+                    if wait_for_idle_start_time == 0.0:
+                        now = self.get_current_time()
+                        wait_for_idle_start_time = now
+                        self.log.debug(f"Entered WAITING_FOR_IDLE state. Timeout check starts now ({STATUS_CHECK_TIMEOUT}s).")
                     current_state, last_idle_check_time = self._handle_waiting_for_idle(
-                        now, elapsed_cycle_time, last_idle_check_time, pod_id, pod_url
+                        now, wait_for_idle_start_time, last_idle_check_time, pod_id, pod_url
                     )
 
                 if current_state == STATE_ATTEMPTING_PIPELINE_RUN:
@@ -216,7 +221,7 @@ class TranscriptionPipelineManager:
 
     # --- State Handler Methods ---
 
-    def _handle_starting_cycle(self, now: float) -> tuple[str, float, str, str, float, float]:
+    def _handle_starting_cycle(self, now: float) -> tuple[str, float, str, str, float, float, float]:
         """Handles logic for the STARTING_CYCLE state."""
         self.log.debug("Starting new hourly cycle.")
         next_state = STATE_ATTEMPTING_POD_START
@@ -225,7 +230,8 @@ class TranscriptionPipelineManager:
         pod_url = ""
         last_count_update_time = 0.0
         last_idle_check_time = 0.0
-        return next_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time
+        wait_for_idle_start_time = 0.0
+        return next_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time, wait_for_idle_start_time
 
     def _handle_attempting_pod_start(self) -> tuple[str, str, str]:
         """Handles logic for the ATTEMPTING_POD_START state."""
@@ -248,12 +254,13 @@ class TranscriptionPipelineManager:
             self._terminate_pods()
         return next_state, pod_id, pod_url
 
-    def _handle_waiting_for_idle(self, now: float, elapsed_cycle_time: float, last_idle_check_time: float, pod_id: str, pod_url: str) -> tuple[str, float]:
+    def _handle_waiting_for_idle(self, now: float, wait_for_idle_start_time: float, last_idle_check_time: float, pod_id: str, pod_url: str) -> tuple[str, float]:
         """Handles logic for the WAITING_FOR_IDLE state."""
         next_state = STATE_WAITING_FOR_IDLE
         updated_last_idle_check_time = last_idle_check_time
-        if elapsed_cycle_time >= STATUS_CHECK_TIMEOUT:
-            self.log.warning(f"Timeout ({STATUS_CHECK_TIMEOUT}s) waiting for pod {pod_id} to become idle. Terminating.")
+        elapsed_wait_time = now - wait_for_idle_start_time if wait_for_idle_start_time > 0.0 else 0.0
+        if elapsed_wait_time >= STATUS_CHECK_TIMEOUT:
+            self.log.warning(f"Timeout ({STATUS_CHECK_TIMEOUT}s, waited {elapsed_wait_time:.1f}s) waiting for pod {pod_id} to become idle. Terminating.")
             self._terminate_pods()
             next_state = STATE_WAITING_AFTER_FAILURE
         elif now - last_idle_check_time >= POD_STATUS_CHECK_INTERVAL:
