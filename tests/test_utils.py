@@ -11,7 +11,7 @@ from transcription_pipeline_manager.utils import (
 )
 
 from transcription_pipeline_manager.constants import (
-    DEFAULT_RETRY_ATTEMPTS,
+    POST_RETRY_ATTEMPTS,
     DOWNLOAD_TIMEOUT,
 )
 
@@ -46,13 +46,14 @@ def test_post_request_success(mock_post):
 @patch("requests.post")
 @patch("tenacity.nap.time.sleep")
 def test_post_request_failure(_, mock_post):
-    mock_post.side_effect = requests.exceptions.RequestException
+    mock_post.side_effect = requests.exceptions.RequestException("Test connection error")
     url = "http://example.com"
     data = {"key": "value"}
     with pytest.raises(tenacity.RetryError):
         post_request(url, data=data)
+
     mock_post.assert_called_with(url, data=data, timeout=DOWNLOAD_TIMEOUT)
-    assert mock_post.call_count == DEFAULT_RETRY_ATTEMPTS
+    assert mock_post.call_count == POST_RETRY_ATTEMPTS
 
 
 @patch("requests.post")
@@ -70,10 +71,11 @@ def test_post_request_json_success(mock_post):
 @patch("requests.post")
 @patch("tenacity.nap.time.sleep")
 def test_post_request_json_failure(_, mock_post):
-    mock_post.side_effect = requests.exceptions.RequestException
+    mock_post.side_effect = requests.exceptions.RequestException("Test JSON connection error")
     url = "http://example.com"
     data = {"key": "value"}
     with pytest.raises(tenacity.RetryError):
         post_request(url, data=data, json=True)
+
     mock_post.assert_called_with(url, json=data, timeout=DOWNLOAD_TIMEOUT)
-    assert mock_post.call_count == DEFAULT_RETRY_ATTEMPTS
+    assert mock_post.call_count == POST_RETRY_ATTEMPTS

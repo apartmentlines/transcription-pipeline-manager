@@ -12,6 +12,7 @@ import pytest
 from pytest_mock import MockerFixture
 import requests
 from requests.exceptions import RequestException
+from tenacity import RetryError
 
 # Modules to test
 from transcription_pipeline_manager import constants as const
@@ -422,25 +423,6 @@ def test_trigger_pipeline_run_failure_response(mock_post_request: MagicMock, man
     mock_post_request.assert_called_once()
     mock_logger.error.assert_called_once_with(
         f"Pipeline run trigger failed at {TEST_POD_URL}/run: Invalid parameters"
-    )
-    mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
-
-
-@patch("transcription_pipeline_manager.manager.post_request")
-def test_trigger_pipeline_run_http_error(mock_post_request: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False when post_request raises HTTPError."""
-    mock_response = MagicMock(spec=requests.Response) # Create a mock response for the exception
-    mock_response.status_code = 503
-    mock_response.reason = "Service Unavailable"
-    http_error = requests.exceptions.HTTPError(response=mock_response)
-    mock_post_request.side_effect = http_error
-
-    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
-
-    assert result is False
-    mock_post_request.assert_called_once()
-    mock_logger.error.assert_called_once_with(
-        f"Failed to trigger pipeline run at {TEST_POD_URL}/run. Status: 503 Service Unavailable"
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
@@ -1628,22 +1610,40 @@ def test_handle_shutdown_signal(manager_instance: TranscriptionPipelineManager, 
 
 
 @patch("transcription_pipeline_manager.manager.post_request")
-def test_trigger_pipeline_run_request_exception(mock_post_request: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
-    """Test _trigger_pipeline_run returns False when post_request raises RequestException."""
+def test_trigger_pipeline_run_retry_error(mock_post_request: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run logs correctly when post_request raises RetryError."""
     request_exception = RequestException("Connection failed")
-    mock_post_request.side_effect = request_exception
-
+    # Mock post_request itself to raise the RetryError containing the original exception
+    # Note: In a real scenario, the @retry decorator handles this wrapping.
+    # Here, we simulate the outcome of the retries failing.
+    mock_post_request.side_effect = RetryError(last_attempt=MagicMock(exception=lambda: request_exception))
     result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
-
     assert result is False
     mock_post_request.assert_called_once()
     mock_logger.error.assert_called_once_with(
-        f"Error triggering pipeline run at {TEST_POD_URL}/run: {request_exception}", exc_info=False
+        f"Failed to trigger pipeline run at {TEST_POD_URL}/run after multiple retries.",
+        exc_info=True
+    )
+
+
+@patch("transcription_pipeline_manager.manager.post_request")
+@patch.object(TranscriptionPipelineManager, "_process_trigger_pipeline_run_response")
+def test_trigger_pipeline_run_processing_exception(mock_process_response: MagicMock, mock_post_request: MagicMock, manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_rest_interface: MagicMock) -> None:
+    """Test _trigger_pipeline_run handles exceptions during response processing."""
+    mock_post_request.return_value = MagicMock(spec=requests.Response)
+    processing_exception = ValueError("Processing failed")
+    mock_process_response.side_effect = processing_exception
+    result = manager_instance._trigger_pipeline_run(TEST_POD_URL)
+    assert result is False
+    mock_post_request.assert_called_once()
+    mock_process_response.assert_called_once()
+    mock_logger.error.assert_called_once_with(
+        f"An unexpected error occurred triggering pipeline run at {TEST_POD_URL}/run: {processing_exception}",
+        exc_info=manager_instance.debug
     )
     mock_rest_interface.update_pipeline_last_run_time.assert_not_called()
 
 
-# _build_logs_callback_url
 @pytest.mark.parametrize(
     "ngrok_enabled, expected_url_pattern",
     [

@@ -12,6 +12,7 @@ from typing import Any
 
 import requests
 from requests.exceptions import RequestException
+from tenacity import RetryError
 from runpod_singleton import RunpodSingletonManager
 
 from transcription_pipeline_manager.rest_interface import RestInterface
@@ -398,11 +399,11 @@ class TranscriptionPipelineManager:
         try:
             response = post_request(run_url, payload, True)
             return self._process_trigger_pipeline_run_response(run_url, response)
-        except requests.exceptions.HTTPError as e:
-            self.log.error(f"Failed to trigger pipeline run at {run_url}. Status: {e.response.status_code} {e.response.reason}")
+        except RetryError as e:
+            self.log.error(f"Failed to trigger pipeline run at {run_url} after multiple retries.", exc_info=True)
             return False
         except Exception as e:
-            self.log.error(f"Error triggering pipeline run at {run_url}: {e}", exc_info=self.debug)
+            self.log.error(f"An unexpected error occurred triggering pipeline run at {run_url}: {e}", exc_info=self.debug)
             return False
 
     def _terminate_pods(self) -> None:
