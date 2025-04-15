@@ -222,7 +222,7 @@ class RestInterface:
                     self.log.debug("Received JSON payload")
                     # Mimic original behavior of printing key/value pairs
                     for key, value in parsed_json.items():
-                        print(f"\n{key}:\n{value}")
+                        print(f"\n{key}:\n{value}", flush=True)
                 except json.JSONDecodeError:
                     self.log.warning(
                         "Content-Type is application/json but failed to parse body."
