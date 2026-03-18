@@ -2,8 +2,8 @@
 pod_name: transcription-pipeline
 image_name: apartmentlinesproduction/transcription-pipeline:v0.1.0
 gpu_types:
-  - NVIDIA GeForce RTX 3090
   - NVIDIA A40
+  - NVIDIA GeForce RTX 3090
   # - NVIDIA RTX A5000
 cloud_type: SECURE
 start_ssh: false
