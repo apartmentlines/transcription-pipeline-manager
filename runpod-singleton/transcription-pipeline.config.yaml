@@ -1,12 +1,18 @@
 # Pod.
 # TODO: Temporary hack to work around auto scheduler bug.
 # Waiting on https://contact.runpod.io/hc/en-us/requests/45365
-data_center_id: EU-SE-1
+# data_center_id: EU-SE-1
 pod_name: transcription-pipeline
 image_name: apartmentlinesproduction/transcription-pipeline:v0.1.0
 gpu_types:
-  - NVIDIA A40
   - NVIDIA GeForce RTX 3090
+  - NVIDIA RTX PRO 4000 Blackwell
+  - NVIDIA RTX A6000
+  - NVIDIA A40
+  - NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb
+  - NVIDIA RTX PRO 4500 Blackwell
+  - NVIDIA RTX PRO 4500 Blackwell Server Edition
+  - NVIDIA GeForce RTX 4090
   # - NVIDIA RTX A5000
 cloud_type: SECURE
 start_ssh: false
