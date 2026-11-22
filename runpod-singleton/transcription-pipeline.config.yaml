@@ -3,7 +3,7 @@
 # Waiting on https://contact.runpod.io/hc/en-us/requests/45365
 # data_center_id: EU-SE-1
 pod_name: transcription-pipeline
-image_name: apartmentlinesproduction/transcription-pipeline:v0.1.0
+image_name: apartmentlinesproduction/transcription-pipeline-qwen3:v0.1.0
 gpu_types:
   - NVIDIA GeForce RTX 3090
   - NVIDIA RTX PRO 4000 Blackwell
