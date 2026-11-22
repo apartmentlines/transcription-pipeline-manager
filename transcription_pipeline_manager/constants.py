@@ -17,7 +17,8 @@ DEFAULT_TRANSCRIPTION_LIMIT = 1000
 DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT = 2
 
 # Manager specific constants
-CYCLE_DURATION = 3600  # seconds (1 hour)
+CYCLE_DURATION = 4 * 60 * 60  # seconds (4 hours)
+FAILURE_RETRY_DELAY = 15 * 60
 STATUS_CHECK_TIMEOUT = 420  # seconds (7 minutes) for idle check
 COUNT_UPDATE_INTERVAL = 60  # seconds (1 minute)
 MAIN_LOOP_SLEEP = 1  # second

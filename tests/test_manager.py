@@ -500,7 +500,7 @@ def test_handle_starting_cycle(manager_instance: TranscriptionPipelineManager, m
     assert last_count == 0.0
     assert last_idle == 0.0
     assert wait_start == 0.0
-    mock_logger.debug.assert_called_with("Starting new hourly cycle.")
+    mock_logger.debug.assert_called_with("Starting new cycle.")
 
 
 def test_handle_attempting_pod_start_success(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock, mock_runpod_manager: tuple[MagicMock, MagicMock]) -> None:
@@ -686,13 +686,112 @@ def test_handle_updating_counts_interval_reached_update_failure(manager_instance
 
 def test_handle_waiting_after_failure(manager_instance: TranscriptionPipelineManager, mock_logger: MagicMock) -> None:
     """Test _handle_waiting_after_failure returns correct state and logs."""
-    elapsed_cycle_time = 1000
-    remaining_time = max(0, const.CYCLE_DURATION - elapsed_cycle_time)
+    elapsed_failure_time = 100
+    remaining_time = const.FAILURE_RETRY_DELAY - elapsed_failure_time
 
-    next_state = manager_instance._handle_waiting_after_failure(elapsed_cycle_time)
+    next_state = manager_instance._handle_waiting_after_failure(elapsed_failure_time)
 
     assert next_state == const.STATE_WAITING_AFTER_FAILURE
-    mock_logger.warning.assert_called_with(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+    mock_logger.warning.assert_called_with(f"In failure state. Waiting to retry. Time remaining: {remaining_time:.0f}s")
+
+
+@pytest.mark.parametrize("elapsed", [const.FAILURE_RETRY_DELAY, const.FAILURE_RETRY_DELAY + 1])
+def test_handle_waiting_after_failure_retries_when_due(
+    manager_instance: TranscriptionPipelineManager, elapsed: float
+) -> None:
+    """Retry at the failure deadline, including when the loop runs late."""
+    assert manager_instance._handle_waiting_after_failure(elapsed) == const.STATE_STARTING_CYCLE
+
+
+class TestFailureRetrySchedule:
+    """Exercise independent retry deadlines through the manager's real loop."""
+
+    @pytest.mark.parametrize("failure_duration", [120.0, const.CYCLE_DURATION + 10.0])
+    @pytest.mark.parametrize("failure_stage", ["pod_start", "idle", "trigger"])
+    def test_repeated_failures_then_regular_schedule(
+        self,
+        manager_instance: TranscriptionPipelineManager,
+        mocker: MockerFixture,
+        failure_duration: float,
+        failure_stage: str,
+    ) -> None:
+        """Wait from each failure, then resume four-hour cycles after success."""
+        manager = manager_instance
+        current_time = 1000.0
+        attempts = 0
+        mocker.patch.object(manager, "get_current_time", side_effect=lambda: current_time)
+        mocker.patch.object(manager, "_setup_signal_handlers")
+        mocker.patch.object(manager, "_shutdown")
+        mocker.patch.object(manager, "_check_pod_idle_status", return_value=True)
+        mocker.patch.object(manager, "_trigger_pipeline_run", return_value=True)
+        mocker.patch.object(manager, "_update_pod_counts", return_value=True)
+        cycle_starts = mocker.spy(manager, "_handle_starting_cycle")
+        critical_log = mocker.spy(manager.log, "critical")
+
+        def should_fail() -> bool:
+            nonlocal attempts, current_time
+            attempts += 1
+            if attempts <= 2:
+                current_time += failure_duration if attempts == 1 else 120.0
+                return True
+            return False
+
+        def start_pod() -> tuple[str, str, str]:
+            if should_fail():
+                return const.STATE_WAITING_AFTER_FAILURE, "", ""
+            return const.STATE_WAITING_FOR_IDLE, TEST_POD_ID, TEST_POD_URL
+
+        def wait_for_idle(
+            now: float, wait_start: float, last_check: float, pod_id: str, pod_url: str
+        ) -> tuple[str, float]:
+            state = const.STATE_WAITING_AFTER_FAILURE if should_fail() else const.STATE_ATTEMPTING_PIPELINE_RUN
+            return state, now
+
+        def trigger_pipeline(pod_id: str, pod_url: str) -> str:
+            return const.STATE_WAITING_AFTER_FAILURE if should_fail() else const.STATE_UPDATING_COUNTS
+
+        if failure_stage == "pod_start":
+            mocker.patch.object(manager, "_handle_attempting_pod_start", side_effect=start_pod)
+        elif failure_stage == "idle":
+            mocker.patch.object(manager, "_handle_waiting_for_idle", side_effect=wait_for_idle)
+        else:
+            mocker.patch.object(manager, "_handle_attempting_pipeline_run", side_effect=trigger_pipeline)
+
+        first_failure = current_time + failure_duration
+        second_start = first_failure + const.FAILURE_RETRY_DELAY + 1
+        second_failure = second_start + 120
+        successful_start = second_failure + const.FAILURE_RETRY_DELAY + 1
+        next_regular_start = successful_start + const.CYCLE_DURATION
+        checkpoints = iter([
+            (1, first_failure + const.FAILURE_RETRY_DELAY - 1),
+            (1, first_failure + const.FAILURE_RETRY_DELAY),
+            (1, second_start),
+            (2, second_failure + const.FAILURE_RETRY_DELAY - 1),
+            (2, second_failure + const.FAILURE_RETRY_DELAY),
+            (2, successful_start),
+            (3, successful_start + const.FAILURE_RETRY_DELAY + 1),
+            (3, next_regular_start - 1),
+            (3, next_regular_start),
+            (4, None),
+        ])
+
+        def advance_clock(seconds: float) -> None:
+            nonlocal current_time
+            expected_attempts, next_time = next(checkpoints)
+            assert attempts == expected_attempts
+            if next_time is None:
+                manager.shutdown_event.set()
+            else:
+                current_time = next_time
+
+        mocker.patch.object(manager, "sleep", side_effect=advance_clock)
+        manager.run()
+
+        critical_log.assert_not_called()
+        assert manager.shutdown_event.is_set()
+        assert cycle_starts.call_args_list == [
+            call(1000.0), call(second_start), call(successful_start), call(next_regular_start)
+        ]
 
 
 # Phase 3: run() Method Integration Tests
@@ -981,7 +1080,7 @@ def test_run_navigates_full_success_cycle(
 @patch.object(TranscriptionPipelineManager, "_handle_waiting_for_idle")
 @patch.object(TranscriptionPipelineManager, "_shutdown")
 @patch.object(TranscriptionPipelineManager, "_setup_signal_handlers")
-def test_run_triggers_hourly_reset(
+def test_run_triggers_regular_reset(
     mock_setup_signals: MagicMock,
     mock_shutdown: MagicMock,
     mock_handle_wait_idle: MagicMock,

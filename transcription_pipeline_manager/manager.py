@@ -31,6 +31,7 @@ from transcription_pipeline_manager.constants import (
     DEFAULT_TRANSCRIPTION_PROCESSING_LIMIT,
     # Manager specific constants
     CYCLE_DURATION,
+    FAILURE_RETRY_DELAY,
     STATUS_CHECK_TIMEOUT,
     COUNT_UPDATE_INTERVAL,
     MAIN_LOOP_SLEEP,
@@ -56,7 +57,7 @@ class TranscriptionPipelineManager:
 
     This class orchestrates starting a pod, waiting for it to become idle,
     triggering a processing run, monitoring its status (via REST interface updates),
-    and handling cleanup, all within a defined hourly cycle.
+    and handling cleanup, with separate regular and failure retry intervals.
     """
     def __init__(
         self,
@@ -159,6 +160,7 @@ class TranscriptionPipelineManager:
 
         current_state: str = STATE_STARTING_CYCLE
         cycle_start_time: float = 0.0
+        failure_start_time: float | None = None
         pod_id: str = ""
         pod_url: str = ""
         last_count_update_time: float = 0.0
@@ -171,13 +173,14 @@ class TranscriptionPipelineManager:
                 elapsed_cycle_time = now - cycle_start_time if cycle_start_time > 0 else 0
 
                 # --- Time-Based Cycle Reset ---
-                if current_state != STATE_STARTING_CYCLE and elapsed_cycle_time >= CYCLE_DURATION:
-                    self.log.info(f"Hourly cycle duration ({CYCLE_DURATION}s) reached. Resetting cycle.")
+                if current_state not in (STATE_STARTING_CYCLE, STATE_WAITING_AFTER_FAILURE) and elapsed_cycle_time >= CYCLE_DURATION:
+                    self.log.info(f"Cycle duration ({CYCLE_DURATION}s) reached. Resetting cycle.")
                     current_state = STATE_STARTING_CYCLE
                     # Pod termination is handled by pod itself or next start cycle
 
                 # --- State Dispatch ---
                 if current_state == STATE_STARTING_CYCLE:
+                    failure_start_time = None
                     current_state, cycle_start_time, pod_id, pod_url, last_count_update_time, last_idle_check_time, wait_for_idle_start_time = self._handle_starting_cycle(now)
 
                 if current_state == STATE_ATTEMPTING_POD_START:
@@ -201,7 +204,12 @@ class TranscriptionPipelineManager:
                     )
 
                 if current_state == STATE_WAITING_AFTER_FAILURE:
-                    current_state = self._handle_waiting_after_failure(elapsed_cycle_time)
+                    failure_now = self.get_current_time()
+                    if failure_start_time is None:
+                        failure_start_time = failure_now
+                    current_state = self._handle_waiting_after_failure(
+                        failure_now - failure_start_time
+                    )
 
                 if current_state not in VALID_STATES:
                     raise RuntimeError(f"Encountered unknown or invalid state: {current_state}. Aborting.")
@@ -224,7 +232,7 @@ class TranscriptionPipelineManager:
 
     def _handle_starting_cycle(self, now: float) -> tuple[str, float, str, str, float, float, float]:
         """Handles logic for the STARTING_CYCLE state."""
-        self.log.debug("Starting new hourly cycle.")
+        self.log.debug("Starting new cycle.")
         next_state = STATE_ATTEMPTING_POD_START
         cycle_start_time = now
         pod_id = ""
@@ -298,10 +306,13 @@ class TranscriptionPipelineManager:
                 updated_last_count_update_time = now
         return next_state, updated_last_count_update_time
 
-    def _handle_waiting_after_failure(self, elapsed_cycle_time: float) -> str:
-        """Handles logic for the WAITING_AFTER_FAILURE state."""
-        remaining_time = max(0, CYCLE_DURATION - elapsed_cycle_time)
-        self.log.warning(f"In failure state. Waiting for next cycle. Time remaining: {remaining_time:.0f}s")
+    def _handle_waiting_after_failure(self, elapsed_failure_time: float) -> str:
+        """Retry once the delay measured from entering the failure state expires."""
+        remaining_time = max(0, FAILURE_RETRY_DELAY - elapsed_failure_time)
+        if remaining_time == 0:
+            self.log.info("Failure retry delay reached. Starting a new cycle.")
+            return STATE_STARTING_CYCLE
+        self.log.warning(f"In failure state. Waiting to retry. Time remaining: {remaining_time:.0f}s")
         return STATE_WAITING_AFTER_FAILURE
 
     # --- Core Helper Methods ---
